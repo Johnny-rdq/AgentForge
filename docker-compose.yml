@@ -1,0 +1,14 @@
+version: "3.9"
+
+services:
+  agentforge:
+    build: .
+    container_name: agentforge
+    ports:
+      - "7860:7860"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/code/data
+      - ./completed_tasks:/code/completed_tasks
+    restart: unless-stopped
