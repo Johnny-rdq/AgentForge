@@ -8,3 +8,6 @@ data/chroma_db/
 data/*.db
 *.pyo
 .DS_Store
+.idea/
+completed_tasks/
+data/*.json
