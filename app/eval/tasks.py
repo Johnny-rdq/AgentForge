@@ -1,6 +1,6 @@
-# 后端 评测任务集 — 50个标准任务覆盖多场景
+# 后端 评测任务集 — 50 个标准任务覆盖 6 大类
 BENCHMARK_TASKS = [
-    # 后端 数据分析类
+    # ====== 数据分析（10个） ======
     {"id": "T01", "category": "data_analysis", "task": "分析这份销售数据CSV，计算各季度增长率，输出表格", "min_subtasks": 3},
     {"id": "T02", "category": "data_analysis", "task": "统计CSV中各品类销售额占比，找出Top5爆款", "min_subtasks": 3},
     {"id": "T03", "category": "data_analysis", "task": "计算用户复购率和客单价趋势，输出分析结论", "min_subtasks": 3},
@@ -11,31 +11,36 @@ BENCHMARK_TASKS = [
     {"id": "T08", "category": "data_analysis", "task": "分析网站访问日志，计算PV/UV/跳出率", "min_subtasks": 3},
     {"id": "T09", "category": "data_analysis", "task": "用Python分析一份电商评价CSV的情感倾向", "min_subtasks": 3},
     {"id": "T10", "category": "data_analysis", "task": "对股价历史数据做移动平均和波动率分析", "min_subtasks": 3},
-    # 后端 数据可视化类
+
+    # ====== 数据可视化（5个） ======
     {"id": "T11", "category": "visualization", "task": "生成月度销售趋势折线图和柱状图并保存", "min_subtasks": 2},
     {"id": "T12", "category": "visualization", "task": "画一个交互式饼图展示各品类销售占比", "min_subtasks": 2},
     {"id": "T13", "category": "visualization", "task": "生成热力图展示各区域销售密度分布", "min_subtasks": 2},
     {"id": "T14", "category": "visualization", "task": "制作Dashboard风格的多图组合分析页", "min_subtasks": 3},
     {"id": "T15", "category": "visualization", "task": "将分析结果转化为3张可视化图表并输出HTML", "min_subtasks": 3},
-    # 后端 代码生成类
+
+    # ====== 代码生成（5个） ======
     {"id": "T16", "category": "code_generation", "task": "写一个Python脚本批量重命名文件夹中的文件", "min_subtasks": 1},
     {"id": "T17", "category": "code_generation", "task": "写一个Flask REST API实现用户CRUD", "min_subtasks": 1},
     {"id": "T18", "category": "code_generation", "task": "写一个Python爬虫抓取天气预报数据", "min_subtasks": 2},
     {"id": "T19", "category": "code_generation", "task": "用Python实现一个多线程文件下载器", "min_subtasks": 1},
     {"id": "T20", "category": "code_generation", "task": "写一个WebSocket聊天服务器", "min_subtasks": 1},
-    # 后端 信息调研类
+
+    # ====== 信息调研（5个） ======
     {"id": "T21", "category": "research", "task": "搜索2026年最流行的3个AI框架并对比优缺点", "min_subtasks": 2},
     {"id": "T22", "category": "research", "task": "调研LangGraph和CrewAI的性能差异和使用场景", "min_subtasks": 2},
     {"id": "T23", "category": "research", "task": "查北京、上海、深圳三地天气并整理成表格", "min_subtasks": 3},
     {"id": "T24", "category": "research", "task": "搜索MCP协议的最新进展和主流实现", "min_subtasks": 2},
     {"id": "T25", "category": "research", "task": "调查2026年AI Agent领域的融资事件", "min_subtasks": 2},
-    # 后端 文档生成类
+
+    # ====== 文档生成（5个） ======
     {"id": "T26", "category": "report", "task": "根据前面的分析结果写一份数据分析报告(含图表引用)", "min_subtasks": 1},
     {"id": "T27", "category": "report", "task": "把技术调研结果整理成结构化的Markdown技术文档", "min_subtasks": 1},
     {"id": "T28", "category": "report", "task": "生成一份项目README文档包含安装/使用/API说明", "min_subtasks": 1},
     {"id": "T29", "category": "report", "task": "写一份产品需求文档PRD模板", "min_subtasks": 1},
     {"id": "T30", "category": "report", "task": "生成一份周报模板包含工作内容/问题/计划三部分", "min_subtasks": 1},
-    # 后端 综合任务类（多阶段依赖）
+
+    # ====== 综合任务（20个，多阶段依赖） ======
     {"id": "T31", "category": "complex", "task": "分析这份CSV销售数据，生成3张图表，输出一份Markdown分析报告", "min_subtasks": 4},
     {"id": "T32", "category": "complex", "task": "搜索2026年AI趋势，整理成文档，再用Python生成趋势词云图", "min_subtasks": 4},
     {"id": "T33", "category": "complex", "task": "清洗数据→统计分析→画图→写报告→生成管理Dashboard网页", "min_subtasks": 5},
@@ -46,7 +51,6 @@ BENCHMARK_TASKS = [
     {"id": "T38", "category": "complex", "task": "处理问卷数据→统计→画图→生成PPT式分析报告HTML", "min_subtasks": 4},
     {"id": "T39", "category": "complex", "task": "分析股票数据→技术指标计算→生成K线图→写投资建议摘要", "min_subtasks": 4},
     {"id": "T40", "category": "complex", "task": "人口数据分析→增长率计算→预测模型→可视化→生成政策建议报告", "min_subtasks": 5},
-    # 后端 更复杂的综合任务
     {"id": "T41", "category": "complex", "task": "解析Excel财务报表→计算财务指标→画趋势图→生成财务分析报告", "min_subtasks": 4},
     {"id": "T42", "category": "complex", "task": "多源数据对比分析→差异检测→原因分析→生成对比报告HTML", "min_subtasks": 4},
     {"id": "T43", "category": "complex", "task": "用户行为数据分析→漏斗分析→热力图→优化建议文档", "min_subtasks": 4},

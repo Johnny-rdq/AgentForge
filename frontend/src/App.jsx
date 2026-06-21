@@ -5,9 +5,10 @@ import useSessions from './hooks/useSessions'
 import Sidebar from './components/Sidebar'
 import ChatArea from './components/ChatArea'
 import MessageInput from './components/MessageInput'
+import ErrorBoundary from './components/ErrorBoundary'
 import BenchmarkPage from './pages/BenchmarkPage'
 
-function ChatView({ activeId, sidebarOpen, setSidebarOpen, sessions, handleSelectSession, handleSend, createSession, deleteSession, messages, isStreaming, workflowState, stopStreaming }) {
+function ChatView({ activeId, sidebarOpen, setSidebarOpen, sessions, handleSelectSession, handleSend, handleCreate, deleteSession, messages, isStreaming, workflowState, workflowSessionId, stopStreaming, handleApprove }) {
   return (
     <div className="flex h-screen overflow-hidden">
       {sidebarOpen && (
@@ -15,7 +16,7 @@ function ChatView({ activeId, sidebarOpen, setSidebarOpen, sessions, handleSelec
           sessions={sessions}
           activeId={activeId}
           onSelect={handleSelectSession}
-          onCreate={createSession}
+          onCreate={handleCreate}
           onDelete={deleteSession}
           onCollapse={() => setSidebarOpen(false)}
         />
@@ -32,7 +33,10 @@ function ChatView({ activeId, sidebarOpen, setSidebarOpen, sessions, handleSelec
         <ChatArea
           messages={messages}
           workflowState={workflowState}
+          workflowSessionId={workflowSessionId}
+          activeId={activeId}
           isStreaming={isStreaming}
+          onApprove={handleApprove}
         />
         <MessageInput
           onSend={handleSend}
@@ -47,7 +51,7 @@ function ChatView({ activeId, sidebarOpen, setSidebarOpen, sessions, handleSelec
 export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const { sessions, activeId, setActiveId, createSession, deleteSession, updateSessionTitle } = useSessions()
-  const { messages, isStreaming, workflowState, sendMessage, stopStreaming, loadHistory } = useChat(activeId)
+  const { messages, isStreaming, workflowState, workflowSessionId, sendMessage, stopStreaming, loadHistory, approveTask } = useChat(activeId)
 
   useEffect(() => {
     if (activeId) loadHistory(activeId)
@@ -58,9 +62,20 @@ export default function App() {
     loadHistory(id)
   }
 
-  const handleSend = (task) => {
-    updateSessionTitle(activeId, task)
-    sendMessage(task, activeId)
+  const handleCreate = () => {
+    if (activeId && messages.length === 0) return
+    createSession()
+  }
+
+  const handleSend = (task, files = []) => {
+    let targetId = activeId
+    if (!targetId) targetId = createSession()
+    if (messages.length === 0) updateSessionTitle(targetId, task)
+    sendMessage(task, targetId, files)
+  }
+
+  const handleApprove = (taskId, action, modifications) => {
+    approveTask(taskId, action, modifications)
   }
 
   return (
@@ -68,14 +83,17 @@ export default function App() {
       <Routes>
         <Route path="/benchmark" element={<BenchmarkPage />} />
         <Route path="*" element={
-          <ChatView
-            activeId={activeId} sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen}
-            sessions={sessions} handleSelectSession={handleSelectSession}
-            handleSend={handleSend} createSession={createSession}
-            deleteSession={deleteSession} messages={messages}
-            isStreaming={isStreaming} workflowState={workflowState}
-            stopStreaming={stopStreaming}
-          />
+          <ErrorBoundary>
+            <ChatView
+              activeId={activeId} sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen}
+              sessions={sessions} handleSelectSession={handleSelectSession}
+              handleSend={handleSend} handleCreate={handleCreate}
+              deleteSession={deleteSession} messages={messages}
+              isStreaming={isStreaming} workflowState={workflowState}
+              workflowSessionId={workflowSessionId}
+              stopStreaming={stopStreaming} handleApprove={handleApprove}
+            />
+          </ErrorBoundary>
         } />
       </Routes>
     </BrowserRouter>

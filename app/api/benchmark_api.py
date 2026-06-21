@@ -1,4 +1,4 @@
-# 后端 Benchmark API — 评测报告查询
+# 后端 评测报告 API — 报告列表 + 单篇详情查询
 import os
 import json
 from fastapi import APIRouter
@@ -10,7 +10,7 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
 
 @router.get("/reports")
 async def list_reports():
-    # 后端 列出所有评测报告
+    """后端 列出所有评测报告，按时间倒序"""
     reports = []
     if os.path.exists(DATA_DIR):
         for f in sorted(os.listdir(DATA_DIR), reverse=True):
@@ -29,13 +29,13 @@ async def list_reports():
                         "avg_quality_score": data.get("avg_quality_score", 0),
                     })
                 except Exception:
-                    pass
+                    pass  # 跳过损坏文件
     return {"reports": reports}
 
 
 @router.get("/reports/{filename}")
 async def get_report(filename: str):
-    # 后端 获取单个评测报告详情
+    """后端 获取单个评测报告完整内容"""
     path = os.path.join(DATA_DIR, filename)
     if not os.path.exists(path):
         return {"error": "报告不存在"}

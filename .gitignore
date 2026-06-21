@@ -6,8 +6,12 @@ node_modules/
 frontend/dist/
 data/chroma_db/
 data/*.db
+data/*.json
+data/uploads/
+data/tasks/
+logs/
+test_output.txt
 *.pyo
 .DS_Store
 .idea/
 completed_tasks/
-data/*.json

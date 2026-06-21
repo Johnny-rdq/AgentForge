@@ -1,178 +1,485 @@
-# 后端 SSE 流式对话 API — 支持 Human-in-the-Loop 审批
+# 后端 SSE 流式对话 API — 任务执行 + HITL 审批恢复 + 取消 + token 流式输出
 import json
+import os
 import asyncio
-from fastapi import APIRouter, Request
+import time
+import queue
+from concurrent.futures import ThreadPoolExecutor
+from fastapi import APIRouter, Request, UploadFile, File, Form
 from sse_starlette.sse import EventSourceResponse
 from langgraph.types import Command
-from ..models.schemas import ChatRequest
-from ..agent.state import create_initial_state
-from ..graph.workflow import get_agent_graph
-from ..memory.sql_store import sql_memory
+from app.core.logger import get_logger
+from app.core.config import settings
+from app.models.schemas import ChatRequest
+from app.agent.state import create_initial_state
+from app.graph.workflow import get_agent_graph
+from app.memory.sql_store import sql_memory
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["agent"])
 
-# 后端 存储待审批的任务（生产环境应放 Redis）
 _pending_reviews: dict[str, dict] = {}
+_cancel_flags: dict[str, bool] = {}
+_conversation_history: dict[str, list[dict]] = {}  # 后端 会话级对话记忆，thread_id → [{"role":..., "content":...}]
+
+UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data", "uploads")
+
+
+@router.get("/health")
+async def health_check():
+    """后端 健康检查端点"""
+    from datetime import datetime
+    return {"status": "ok", "timestamp": datetime.now().isoformat()}
+
 
 @router.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
+    """后端 SSE 流式对话：接收任务 → 流式执行 → 实时推送状态"""
     return EventSourceResponse(
-        _execute_and_stream(request),
+        _execute_and_stream(request.task, request.thread_id or "default_session", request.files_json or "[]"),
         headers={"Content-Type": "text/event-stream; charset=utf-8"}
     )
 
+
 @router.post("/chat/resume")
 async def resume_stream(request: dict):
-    # 后端 人工审批后恢复执行
+    """后端 审批恢复：将 approve/reject/modify 决策注入 LangGraph 继续执行"""
+
+    # 后端 核心：Command(resume=human_response) 从 interrupt 暂停点恢复
     task_id = request.get("task_id", "")
-    action = request.get("action", "approve")  # approve / reject / modify
-    modified_subtasks = request.get("subtasks", None)
-
+    action = request.get("action", "approve")
     thread_id = request.get("thread_id", "default")
-    config = {"configurable": {"thread_id": thread_id}}
 
+    config = {"configurable": {"thread_id": thread_id}}
     graph = get_agent_graph()
+
     human_response = {"action": action}
-    if modified_subtasks:
-        human_response["subtasks"] = modified_subtasks
+    if request.get("subtasks"):
+        human_response["subtasks"] = request["subtasks"]
+
+    logger.info(f"审批恢复: task={task_id}, action={action}")
 
     return EventSourceResponse(
         _execute_resume(graph, config, human_response, task_id, thread_id),
         headers={"Content-Type": "text/event-stream; charset=utf-8"}
     )
 
-async def _execute_and_stream(request: ChatRequest):
-    task_input = request.task
-    thread_id = request.thread_id or "default_session"
-    config = {"configurable": {"thread_id": thread_id}}
+
+@router.post("/chat/cancel")
+async def cancel_task(request: dict):
+    """后端 任务取消：设置内存取消标记，执行循环检测到后中止"""
+    task_id = request.get("task_id", "")
+    if not task_id:
+        return {"error": "缺少 task_id"}
+
+    _cancel_flags[task_id] = True
+    _pending_reviews.pop(task_id, None)
+    logger.info(f"任务取消请求: {task_id}")
+    return {"status": "cancelled", "task_id": task_id}
+
+
+async def _execute_and_stream(task_input: str, thread_id: str = "default_session", files_json: str = "[]"):
+    """后端 核心执行流程：简单任务直接调 Worker（跳过 graph），复杂任务走 LangGraph"""
+    start_time = time.time()
 
     sql_memory.create_session(thread_id)
-    sql_memory.update_title(thread_id, task_input)  # 后端 首次对话自动设标题
-    state = create_initial_state(task_input)
+    sql_memory.update_title(thread_id, task_input)
+
+    history = _conversation_history.get(thread_id, [])
+    state = create_initial_state(task_input, conversation_history=history)
+    task_id = state["task_id"]
+
+    # ===== 超级快速通道：regex 检测到的简单单任务 → 跳过整个 graph =====
+    from app.agent.master import _fast_path
+    fast_subtasks = _fast_path(task_input)
+    if fast_subtasks and len(fast_subtasks) == 1:
+        sub = fast_subtasks[0]
+        sub["_dep_results"] = ""  # 后端 单任务无依赖
+
+        yield _sse("thinking", {"stage": "execute", "message": "正在处理..."})
+
+        import app.agent.worker as worker_mod
+        from app.agent.worker import execute_subtask
+        token_queue: queue.Queue = queue.Queue()
+        worker_mod._token_bridge = token_queue
+
+        worker_result = [None]  # 后端 用 list 容器在线程间传递结果
+
+        def run_worker():
+            worker_result[0] = execute_subtask(sub)
+
+        wf_executor = ThreadPoolExecutor(max_workers=1)
+        future = wf_executor.submit(run_worker)
+        has_streamed = False
+
+        # 后端 轮询：排空 token → 检查 Worker 是否完成 → 完成则立即退出
+        while True:
+            while True:
+                try:
+                    token = token_queue.get_nowait()
+                    yield _sse("token", token)
+                    has_streamed = True
+                except queue.Empty:
+                    break
+            if future.done():
+                while True:
+                    try:
+                        token = token_queue.get_nowait()
+                        yield _sse("token", token)
+                        has_streamed = True
+                    except queue.Empty:
+                        break
+                break
+            await asyncio.sleep(0.02)
+
+        worker_mod._token_bridge = None
+        wf_executor.shutdown(wait=False)
+
+        elapsed = time.time() - start_time
+        final_output = worker_result[0] or ""
+
+        yield _sse("result", {
+            "output": "" if has_streamed else final_output,
+            "task_id": task_id, "subtask_count": 1,
+            "streamed": has_streamed, "elapsed_ms": int(elapsed * 1000),
+        })
+        if final_output:
+            _bg_persist(elapsed, task_id, thread_id, task_input, final_output, fast_subtasks, files_json)
+            _save_conversation(thread_id, task_input, final_output)
+        yield _sse("done", {"elapsed": round(elapsed, 1)})
+        logger.info(f"⚡ 快速通道: {task_id}, 耗时 {elapsed:.1f}s")
+        return
+
+    # ===== Graph 路径：复杂/多子任务 =====
+    config = {"configurable": {"thread_id": thread_id}}
 
     yield _sse("thinking", {"stage": "decompose", "message": "正在分析任务..."})
 
     graph = get_agent_graph()
 
+    # 后端 线程安全队列：Worker 线程写入 token，主协程读取推送 SSE
+    import app.agent.worker as worker_mod
+    token_queue: queue.Queue = queue.Queue()
+    worker_mod._token_bridge = token_queue
+
+    # 后端 步骤队列：LangGraph 每完成一个节点就放入（asyncio.Queue 只在主协程使用，线程安全由 call_soon_threadsafe 保证）
+    step_queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def run_graph_in_thread():
+        """后端 在独立线程中同步执行 LangGraph 图"""
+        try:
+            for step_output in graph.stream(state, config):
+                asyncio.run_coroutine_threadsafe(step_queue.put(("step", step_output)), loop)
+                if time.time() - start_time > settings.workflow_timeout:
+                    asyncio.run_coroutine_threadsafe(step_queue.put(("timeout", None)), loop)
+                    return
+                if _cancel_flags.get(task_id):
+                    asyncio.run_coroutine_threadsafe(step_queue.put(("cancelled", None)), loop)
+                    return
+        except Exception as e:
+            asyncio.run_coroutine_threadsafe(step_queue.put(("error", e)), loop)
+        finally:
+            asyncio.run_coroutine_threadsafe(step_queue.put(("graph_done", None)), loop)
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    executor.submit(run_graph_in_thread)
+
+    final_state = None
+    has_streamed = False
+    aborted = False
+    done_sent = False
+    # 后端 缓存第一个有 Worker 结果的 state，token 流完后用于提前结束
+    _worker_result_state = None
+
     try:
-        final_state = None
-        task_id = state["task_id"]
+        while True:
+            # 后端 优先排空 token 队列
+            token_drained = False
+            while True:
+                try:
+                    token = token_queue.get_nowait()
+                    yield _sse("token", token)
+                    has_streamed = True
+                    token_drained = True
+                except queue.Empty:
+                    break
 
-        # 后端 流式执行，遇到 interrupt 自动暂停
-        for step_output in graph.stream(state, config):
-            final_state = step_output
-            for node_name, node_state in step_output.items():
-                for evt in _process_step(node_name, node_state, task_id):
-                    yield evt
+            # 后端 取下一个步骤事件
+            try:
+                msg_type, payload = await asyncio.wait_for(step_queue.get(), timeout=0.03 if token_drained else 0.15)
+            except asyncio.TimeoutError:
+                # 后端 token 已全部输出 + 有 Worker 结果 → 提前结束，不让前端等
+                if has_streamed and not done_sent and _worker_result_state is not None:
+                    fout, slist = _extract_output(_worker_result_state)
+                    if fout:
+                        elapsed = time.time() - start_time
+                        logger.info(f"⚡ 提前结束(token流完): {task_id}, 耗时 {elapsed:.1f}s")
+                        _bg_persist(elapsed, task_id, thread_id, task_input, fout, slist, files_json)
+                        _save_conversation(thread_id, task_input, fout)
+                        worker_mod._token_bridge = None
+                        executor.shutdown(wait=False)
+                        yield _sse("done", {"elapsed": round(elapsed, 1)})
+                        return
+                continue
 
-        # 后端 流式输出最终结果
-        if final_state:
-            for evt in _emit_final_result(final_state, task_input, thread_id, task_id):
-                yield evt
+            if msg_type == "graph_done":
+                break
+            elif msg_type == "timeout":
+                logger.warning(f"工作流超时: {task_id} (>{settings.workflow_timeout}s)")
+                yield _sse("error", {"message": f"任务执行超时（>{settings.workflow_timeout}秒），请简化任务重试"})
+                aborted = True
+                return
+            elif msg_type == "cancelled":
+                logger.info(f"任务被取消: {task_id}")
+                yield _sse("cancelled", {"task_id": task_id, "message": "任务已被取消"})
+                _cancel_flags.pop(task_id, None)
+                aborted = True
+                return
+            elif msg_type == "error":
+                raise payload
+            elif msg_type == "step":
+                step_output = payload
+                # 后端 缓存第一个包含 Worker 结果的状态（用于提前结束）
+                if _worker_result_state is None:
+                    for ns in step_output.values():
+                        for s in ns.get("subtasks", []):
+                            if s.get("result") and s["status"] in ("done", "failed"):
+                                _worker_result_state = step_output
+                                break
+                for node_name, node_state in step_output.items():
+                    for evt in _process_step(node_name, node_state, task_id):
+                        yield evt
+                final_state = step_output
 
-        yield _sse("done", {})
+    finally:
+        while True:
+            try:
+                token = token_queue.get_nowait()
+                yield _sse("token", token)
+                has_streamed = True
+            except queue.Empty:
+                break
+        worker_mod._token_bridge = None
+        executor.shutdown(wait=False)
 
-    except Exception as e:
-        yield _sse("error", {"message": str(e)})
+    if aborted or done_sent:
+        return
+
+    elapsed = time.time() - start_time
+    logger.info(f"任务完成: {task_id}, 耗时 {elapsed:.1f}s, 流式token: {has_streamed}")
+
+    fout, slist = _extract_output(final_state) if final_state else ("", [])
+    # 后端 流式已推送 token → result 不带 content（避免覆盖前端）
+    yield _sse("result", {
+        "output": "" if has_streamed else fout,
+        "task_id": task_id, "subtask_count": len(slist),
+        "streamed": has_streamed, "elapsed_ms": int(elapsed * 1000),
+    })
+    if fout:
+        _bg_persist(elapsed, task_id, thread_id, task_input, fout, slist, files_json)
+        _save_conversation(thread_id, task_input, fout)
+
+    yield _sse("done", {"elapsed": round(elapsed, 1)})
+
 
 async def _execute_resume(graph, config, human_response, task_id, thread_id):
+    """后端 从 interrupt 点恢复执行（审批后继续，含流式输出）"""
+    start_time = time.time()
+    logger.info(f"开始审批恢复执行: {task_id}")
     yield _sse("thinking", {"stage": "execute", "message": "审批通过，开始执行..."})
 
+    # 后端 线程安全队列：Worker 线程写入 token
+    import app.agent.worker as worker_mod
+    token_queue: queue.Queue = queue.Queue()
+    worker_mod._token_bridge = token_queue
+
+    step_queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def run_graph_in_thread():
+        async def _run():
+            try:
+                async for step_output in graph.astream(Command(resume=human_response), config):
+                    if _cancel_flags.get(task_id):
+                        asyncio.run_coroutine_threadsafe(step_queue.put(("cancelled", None)), loop)
+                        return
+                    asyncio.run_coroutine_threadsafe(step_queue.put(("step", step_output)), loop)
+            except Exception as e:
+                asyncio.run_coroutine_threadsafe(step_queue.put(("error", e)), loop)
+            finally:
+                asyncio.run_coroutine_threadsafe(step_queue.put(("graph_done", None)), loop)
+        asyncio.run(_run())
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    executor.submit(run_graph_in_thread)
+
+    final_state = None
+    has_streamed = False
+    aborted = False
+
     try:
-        final_state = None
-        for step_output in graph.stream(Command(resume=human_response), config):
-            final_state = step_output
-            for node_name, node_state in step_output.items():
-                for evt in _process_step(node_name, node_state, task_id):
-                    yield evt
+        while True:
+            while True:
+                try:
+                    token = token_queue.get_nowait()
+                    yield _sse("token", token)
+                    has_streamed = True
+                except queue.Empty:
+                    break
 
-        if final_state:
-            for evt in _emit_final_result(final_state, f"(审批恢复)", thread_id):
-                yield evt
+            try:
+                msg_type, payload = await asyncio.wait_for(step_queue.get(), timeout=0.03)
+            except asyncio.TimeoutError:
+                continue
 
-        yield _sse("done", {})
-    except Exception as e:
-        yield _sse("error", {"message": str(e)})
+            if msg_type == "graph_done":
+                break
+            elif msg_type == "cancelled":
+                yield _sse("cancelled", {"task_id": task_id, "message": "任务已被取消"})
+                _cancel_flags.pop(task_id, None)
+                aborted = True
+                return
+            elif msg_type == "error":
+                raise payload
+            elif msg_type == "step":
+                step_output = payload
+                for node_name, node_state in step_output.items():
+                    for evt in _process_step(node_name, node_state, task_id):
+                        yield evt
+                final_state = step_output
+    finally:
+        while True:
+            try:
+                token = token_queue.get_nowait()
+                yield _sse("token", token)
+                has_streamed = True
+            except queue.Empty:
+                break
+        worker_mod._token_bridge = None
+        executor.shutdown(wait=False)
+
+    if aborted:
+        return
+
+    elapsed = time.time() - start_time
+    elapsed_ms = int(elapsed * 1000)
+    if final_state:
+        for evt in _emit_final_result(final_state, "(审批恢复)", thread_id, task_id, "", has_streamed, elapsed_ms):
+            yield evt
+
+    yield _sse("done", {"elapsed": round(elapsed, 1)})
+
 
 def _process_step(node_name: str, node_state: dict, task_id: str):
-    # 后端 处理每一步的输出
+    """后端 将 LangGraph 节点输出转为 SSE 事件（单子任务简化：跳过中间状态，直接流式输出）"""
     stage = node_state.get("current_stage", "")
     subtasks = node_state.get("subtasks", [])
+    is_simple = len(subtasks) <= 1  # 后端 单子任务 → 简化 UI，不推送中间状态
 
     if node_name == "human_review":
-        # 后端 发送审批请求给前端
-        plan = [
-            {"id": s["id"], "description": s["description"],
-             "agent_type": s["agent_type"], "depends_on": s.get("depends_on", [])}
-            for s in subtasks
-        ]
-        # 后端 存储待审批状态
-        _pending_reviews[task_id] = {"plan": plan, "user_input": node_state.get("user_input", "")}
-        yield _sse("review_required", {
-            "task_id": task_id,
-            "message": "请审批子任务拆解方案",
-            "plan": plan,
-        })
+        plan = [{"id": s["id"], "description": s["description"], "agent_type": s["agent_type"], "depends_on": s.get("depends_on", [])} for s in subtasks]
+        if plan and settings.hitl_enabled:
+            _pending_reviews[task_id] = {"plan": plan, "user_input": node_state.get("user_input", "")}
+            yield _sse("review_required", {"task_id": task_id, "message": "请审批子任务拆解方案", "plan": plan})
 
     elif stage == "decompose":
-        yield _sse("subtask_update", {
-            "stage": "decompose",
-            "subtasks": [
-                {"id": s["id"], "description": s["description"],
-                 "agent_type": s["agent_type"], "depends_on": s.get("depends_on", [])}
-                for s in subtasks
-            ]
-        })
+        if not is_simple:  # 后端 简单任务跳过拆解展示
+            yield _sse("subtask_update", {
+                "stage": "decompose",
+                "subtasks": [{"id": s["id"], "description": s["description"], "agent_type": s["agent_type"], "depends_on": s.get("depends_on", [])} for s in subtasks]
+            })
 
     elif stage == "execute":
-        running = [s for s in subtasks if s["status"] == "running"]
-        yield _sse("thinking", {
-            "stage": "execute",
-            "message": f"正在并行执行 {len(running)} 个子任务...",
-            "running_ids": [s["id"] for s in running]
-        })
-
-    elif stage == "reflect":
-        fresh = [s for s in subtasks if s["status"] == "needs_reflect"]
-        yield _sse("thinking", {
-            "stage": "reflect",
-            "message": f"Agent 自检中 ({len(fresh)}个)"
-        })
+        if not is_simple:  # 后端 简单任务跳过执行中提示
+            running = [s for s in subtasks if s["status"] == "running"]
+            yield _sse("thinking", {"stage": "execute", "message": f"正在并行执行 {len(running)} 个子任务...", "running_ids": [s["id"] for s in running]})
 
     elif stage == "aggregate":
-        yield _sse("thinking", {"stage": "aggregate", "message": "汇总生成最终交付物..."})
+        if not is_simple:
+            yield _sse("thinking", {"stage": "aggregate", "message": "汇总生成最终交付物..."})
 
-def _emit_final_result(final_state, task_input, thread_id, task_id=""):
+
+def _emit_final_result(final_state, task_input, thread_id, task_id="", files_json: str = "[]", has_streamed: bool = False, elapsed_ms: int = 0):
+    """后端 推送最终结果 + 持久化（含耗时）"""
     final_output = ""
     subtask_list = []
 
     if isinstance(final_state, dict):
-        for node_name, ns in final_state.items():
+        for ns in final_state.values():
             final_output = ns.get("final_output", "") or final_output
             subtask_list = ns.get("subtasks", []) or subtask_list
 
-    yield _sse("result", {
-        "output": final_output,
-        "task_id": task_id,
-        "subtask_count": len(subtask_list),
-    })
+    # 后端 流式已推送 token → result 只带元数据
+    if has_streamed:
+        yield _sse("result", {"output": "", "task_id": task_id, "subtask_count": len(subtask_list), "streamed": True, "elapsed_ms": elapsed_ms})
+    else:
+        yield _sse("result", {"output": final_output, "task_id": task_id, "subtask_count": len(subtask_list), "elapsed_ms": elapsed_ms})
 
-    # 后端 打字机效果流式输出
-    if final_output:
-        for i in range(0, len(final_output), 50):
-            yield _sse("token", final_output[i:i+50])
-            asyncio.sleep(0)  # 后端 让出控制权
-
-    # 后端 保存到数据库
+    # 后端 持久化到 SQLite（含耗时）
     if task_id and final_output:
         try:
+            import re
+            clean_input = re.sub(r'\n*[（(]用户上传了文件[^)）]+[)）]', '', task_input)
+            clean_input = re.sub(r'\n*\[用户上传了文件[^\]]+\]', '', clean_input)
+            clean_input = clean_input.strip()
             sql_memory.save_task(
                 task_id=task_id, thread_id=thread_id,
-                user_input=task_input, subtasks=subtask_list,
+                user_input=clean_input, subtasks=subtask_list,
                 final_output=final_output, status="completed",
+                files_json=files_json, elapsed_ms=elapsed_ms,
             )
         except Exception as e:
-            print(f"[DB] 保存任务失败: {e}")
+            logger.error(f"保存任务失败: {e}")
+
 
 def _sse(event: str, data: any) -> dict:
+    """后端 构造 SSE 事件字典"""
     return {"event": event, "data": json.dumps(data, ensure_ascii=False)}
+
+
+def _extract_output(state: dict) -> tuple:
+    """后端 从 LangGraph 状态中提取最终输出和子任务列表"""
+    fout = ""
+    slist = []
+    if isinstance(state, dict):
+        for ns in state.values():
+            fout = ns.get("final_output", "") or fout
+            slist = ns.get("subtasks", []) or slist
+            if not fout and slist:
+                for s in slist:
+                    if s.get("result"):
+                        fout = s["result"]
+                        break
+    return fout, slist
+
+
+def _bg_persist(elapsed_s: float, task_id: str, thread_id: str, task_input: str,
+                final_output: str, subtask_list: list, files_json: str):
+    """后端 后台线程写 SQLite，不阻塞 SSE 响应"""
+    def _do():
+        try:
+            import re
+            elapsed_ms = int(elapsed_s * 1000)
+            clean_input = re.sub(r'\n*[（(]用户上传了文件[^)）]+[)）]', '', task_input)
+            clean_input = re.sub(r'\n*\[用户上传了文件[^\]]+\]', '', clean_input)
+            clean_input = clean_input.strip()
+            sql_memory.save_task(
+                task_id=task_id, thread_id=thread_id,
+                user_input=clean_input, subtasks=subtask_list,
+                final_output=final_output, status="completed",
+                files_json=files_json, elapsed_ms=elapsed_ms,
+            )
+        except Exception as e:
+            logger.error(f"保存任务失败: {e}")
+    ThreadPoolExecutor(max_workers=1).submit(_do)
+
+
+def _save_conversation(thread_id: str, task_input: str, final_output: str):
+    """后端 保存对话到内存（最近 10 轮）"""
+    hist = _conversation_history.setdefault(thread_id, [])
+    hist.append({"role": "user", "content": task_input})
+    hist.append({"role": "assistant", "content": final_output[:500]})
+    if len(hist) > 20:
+        hist[:] = hist[-20:]

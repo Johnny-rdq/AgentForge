@@ -26,11 +26,11 @@ from app.core.config import settings
 def crewai_execute(task_input: str, verbose: bool = False) -> dict:
     start = time.time()
 
-    # 后端 配置 LLM 指向 DashScope（兼容 OpenAI 协议）
+    # 后端 配置 LLM（通过 settings 统一读取）
     llm = LLM(
-        model=settings.llm_model,  # qwen-turbo
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        api_key=settings.dashscope_api_key,
+        model=settings.llm_model,
+        base_url=settings.llm_base_url,
+        api_key=settings.llm_api_key,
     )
 
     # 后端 3 个固定角色

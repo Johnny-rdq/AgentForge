@@ -1,7 +1,8 @@
-# 后端 API 数据模型定义
+# 后端 Pydantic 数据模型 — 请求/响应校验
 from pydantic import BaseModel, Field
 from enum import Enum
 from typing import Optional, Any
+
 
 class TaskStatus(str, Enum):
     pending = "pending"
@@ -11,6 +12,7 @@ class TaskStatus(str, Enum):
     completed = "completed"
     failed = "failed"
 
+
 class SubtaskStatus(str, Enum):
     pending = "pending"
     running = "running"
@@ -18,14 +20,15 @@ class SubtaskStatus(str, Enum):
     done = "done"
     failed = "failed"
 
+
 class ChatRequest(BaseModel):
-    # 后端 聊天请求体
-    task: str = Field(..., description="用户任务描述")
+    task: str = Field(..., description="用户任务描述（含文件分析指令）")
     thread_id: Optional[str] = Field(None, description="会话 ID")
     token: Optional[str] = Field("demo_token", description="访问令牌")
+    files_json: Optional[str] = Field(None, description="上传文件元数据 JSON")
+
 
 class SubtaskInfo(BaseModel):
-    # 后端 子任务信息
     id: str
     description: str
     agent_type: str
@@ -34,21 +37,21 @@ class SubtaskInfo(BaseModel):
     result: Optional[str] = None
     retries: int = 0
 
+
 class TaskResponse(BaseModel):
-    # 后端 任务状态响应
     task_id: str
     status: TaskStatus
     subtasks: list[SubtaskInfo] = []
     final_result: Optional[str] = None
     error_message: Optional[str] = None
 
+
 class SSEEvent(BaseModel):
-    # 后端 SSE 事件
     event: str
     data: Any
 
+
 class BenchmarkResult(BaseModel):
-    # 后端 评测结果
     task_id: str
     task_description: str
     passed: bool
@@ -56,3 +59,10 @@ class BenchmarkResult(BaseModel):
     total_time_seconds: float
     retry_count: int
     output_quality_score: float
+
+
+class FileUploadResponse(BaseModel):
+    """后端 文件上传结果"""
+    filename: str
+    saved_path: str
+    size_bytes: int

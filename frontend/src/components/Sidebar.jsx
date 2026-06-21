@@ -56,14 +56,12 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onDele
           >
             <MessageSquare size={14} className="shrink-0" />
             <span className="truncate flex-1">{s.title}</span>
-            {sessions.length > 1 && (
-              <button
-                onClick={e => { e.stopPropagation(); onDelete(s.id) }}
-                className="opacity-0 group-hover:opacity-100 hover:text-red-400 transition-all"
-              >
-                <Trash2 size={13} />
-              </button>
-            )}
+            <button
+              onClick={e => { e.stopPropagation(); onDelete(s.id) }}
+              className="opacity-0 group-hover:opacity-100 hover:text-red-400 transition-all"
+            >
+              <Trash2 size={13} />
+            </button>
           </button>
         ))}
       </div>

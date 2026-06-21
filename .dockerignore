@@ -1,10 +1,38 @@
-.venv
-__pycache__
+# 后端 Docker 构建排除文件
+
+# Python 缓存
+__pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# 前端 node_modules（构建产物在 frontend/dist/ 会保留）
+frontend/node_modules/
+
+# 敏感配置
 .env
-frontend/node_modules
-frontend/dist
-data
-completed_tasks
-.git
-.idea
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp

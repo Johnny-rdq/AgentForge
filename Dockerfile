@@ -1,23 +1,25 @@
-# 后端 Docker 多阶段构建 — AgentForge
-FROM python:3.11-slim
+# 后端 AgentForge Docker 镜像
+FROM python:3.12-slim
 
-WORKDIR /code
+WORKDIR /app
 
-# 后端 安装系统依赖
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc g++ && \
-    rm -rf /var/lib/apt/lists/*
+# 后端 安装 uv（比 pip 快 10-100 倍），清华镜像加速
+RUN pip install uv --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# 后端 复制依赖文件并安装
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+# 后端 先复制依赖文件，利用 Docker 层缓存加速构建
+COPY pyproject.toml ./
 
-# 后端 复制项目代码
+# 后端 依赖安装（uv 优先，失败回退到 pip）
+RUN uv pip install --system -r pyproject.toml 2>/dev/null || \
+    pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    fastapi uvicorn[standard] openai pydantic-settings langgraph langchain-core \
+    chromadb==0.5.23 sse-starlette duckduckgo-search
+
 COPY . .
 
-# 后端 创建数据目录
-RUN mkdir -p data completed_tasks
+# 后端 创建运行时目录
+RUN mkdir -p /app/data /app/logs
 
 EXPOSE 7860
 
-CMD ["python", "-m", "app.main"]
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7860"]

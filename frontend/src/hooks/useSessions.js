@@ -28,17 +28,16 @@ export default function useSessions() {
     return id
   }, [])
 
-  const createSession = useCallback(async () => {
+  const createSession = useCallback(() => {
     const id = `session_${Date.now()}`
     const s = { id, title: '新会话', createdAt: Date.now() }
 
-    try {
-      await fetch('/api/v1/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ thread_id: id, title: '新会话' }),
-      })
-    } catch {}
+    // 后台异步注册到后端，不阻塞 UI
+    fetch('/api/v1/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ thread_id: id, title: '新会话' }),
+    }).catch(() => {})
 
     setSessions(prev => [s, ...prev])
     setActiveId(id)
@@ -46,23 +45,22 @@ export default function useSessions() {
   }, [])
 
   const updateSessionTitle = useCallback((id, title) => {
-    const short = title.length > 20 ? title.slice(0, 20) : title
+    const short = title.length > 12 ? title.slice(0, 12) : title
     setSessions(prev => prev.map(s =>
       s.id === id ? { ...s, title: short } : s
     ))
   }, [])
 
-  const deleteSession = useCallback(async (id) => {
-    if (sessions.length <= 1) return
-    try {
-      await fetch(`/api/v1/sessions/${id}`, { method: 'DELETE' })
-    } catch {}
-    setSessions(prev => prev.filter(s => s.id !== id))
-    if (activeId === id) {
-      const remaining = sessions.filter(s => s.id !== id)
-      setActiveId(remaining[0]?.id || null)
-    }
-  }, [sessions, activeId])
+  const deleteSession = useCallback((id) => {
+    // 乐观更新：先从 UI 移除，避免卡顿感
+    setSessions(prev => {
+      const next = prev.filter(s => s.id !== id)
+      if (activeId === id) setActiveId(next[0]?.id || null)
+      return next
+    })
+    // 后台异步删 API，不阻塞 UI
+    fetch(`/api/v1/sessions/${id}`, { method: 'DELETE' }).catch(() => {})
+  }, [activeId])
 
   return { sessions, activeId, setActiveId, createSession, deleteSession, updateSessionTitle }
 }

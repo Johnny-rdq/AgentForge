@@ -14,6 +14,7 @@ openai>=1.60.0
 # 后端 MCP 协议
 mcp>=1.0.0
 pydantic>=2.6.0
+pydantic-settings>=2.0.0
 
 # 后端 向量记忆
 chromadb>=0.5.0
@@ -23,9 +24,12 @@ pandas>=2.2.0
 matplotlib>=3.8.0
 numpy>=1.26.0
 
-# 后端 工具依赖
-duckduckgo-search>=6.0.0
+# 后端 文档解析
+PyMuPDF>=1.24.0
+python-docx>=1.1.0
 
-# 后端 评测框架（需MSVC编译工具，Windows上可选安装）
-# ragas>=0.2.0
-# datasets>=3.0.0
+# 后端 OCR
+tencentcloud-sdk-python-ocr>=3.0.0
+
+# 后端 搜索（ping 用 stdlib urllib，无需额外依赖）
+
