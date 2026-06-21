@@ -1,4 +1,4 @@
-import { Plus, Trash2, MessageSquare, Bot, PanelLeftClose, BarChart3 } from 'lucide-react'
+import { Plus, Trash2, MessageSquare, Zap, PanelLeftClose, BarChart3 } from 'lucide-react'
 import { Link, useLocation } from 'react-router-dom'
 
 export default function Sidebar({ sessions, activeId, onSelect, onCreate, onDelete, onCollapse }) {
@@ -9,11 +9,11 @@ export default function Sidebar({ sessions, activeId, onSelect, onCreate, onDele
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 bg-purple-600 rounded-lg flex items-center justify-center">
-              <Bot size={18} className="text-white" />
+              <Zap size={18} className="text-white" />
             </div>
             <div>
               <h1 className="text-sm font-bold text-zinc-100">AgentForge</h1>
-              <p className="text-[10px] text-zinc-500">多Agent自主任务系统</p>
+              <p className="text-[10px] text-zinc-500">AI 智能助手</p>
             </div>
           </div>
           <button

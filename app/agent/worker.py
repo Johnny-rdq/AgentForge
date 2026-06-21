@@ -25,6 +25,20 @@ WORKER_SYSTEM_PROMPT = """你是 {agent_type} 专家。
 - 控制在 500 字以内，只讲重点
 - 严格基于提供的资料回复，不编造"""
 
+# 后端 本地文档分析专用 prompt：不要求来源链接
+FILE_READING_PROMPT = """你是文档分析专家。
+
+当前日期：{current_date}
+
+你正在分析一份用户上传的本地文档。
+
+规则：
+- 用 Markdown 格式输出，结构清晰
+- 只基于文档内容回答，不要编造
+- 不要添加"来源"、"参考链接"等网络搜索相关的内容
+- 这是本地文件，没有来源 URL，直接给出分析结果即可
+- 控制在 500 字以内，只讲重点"""
+
 ROLE_DESCRIPTIONS = {
     "data_cleaner": "清洗和预处理数据，处理缺失值、异常值、格式统一。",
     "analyst": "对数据进行统计分析，计算关键指标，发现趋势和规律。",
@@ -80,30 +94,44 @@ def _extract_file_path(text: str) -> str | None:
 
 
 def _stream_response(messages: list, max_tokens: int = 2048) -> str:
-    """后端 流式生成最终回复（有 _token_bridge 时逐 token 推送）"""
+    """后端 流式生成最终回复（有 _token_bridge 时逐 token 推送，结束后放哨兵）"""
     if _token_bridge is not None:
+        full = ""
         try:
-            full = ""
             for token in get_llm_stream(messages, temperature=0.3, max_tokens=max_tokens):
                 full += token
                 try:
                     _token_bridge.put(token)
                 except Exception:
                     pass
+            # 后端 哨兵：通知主循环流式输出已完成
+            try:
+                _token_bridge.put(None)
+            except Exception:
+                pass
             if full:
                 return full
         except Exception as e:
-            logger.warning(f"流式生成失败: {str(e)[:80]}")
-    # 后端 降级：非流式
-    try:
-        resp = llm_client.chat.completions.create(
-            model=settings.llm_model, messages=messages,
-            temperature=0.3, max_tokens=max_tokens,
-        )
-        return resp.choices[0].message.content or ""
-    except Exception as e:
-        logger.warning(f"LLM 调用失败: {str(e)[:100]}")
-        return str(e)
+            logger.warning(f"流式生成中断: {str(e)[:80]}, 已收到 {len(full)} 字符")
+            # 后端 发哨兵，避免主循环死等
+            try:
+                _token_bridge.put(None)
+            except Exception:
+                pass
+            if full:
+                return full  # 后端 有部分内容就直接返回，不回退到非流式（省时间）
+    # 后端 降级：无 bridge 或流式完全失败时才用非流式
+    if _token_bridge is None:
+        try:
+            resp = llm_client.chat.completions.create(
+                model=settings.llm_model, messages=messages,
+                temperature=0.3, max_tokens=max_tokens,
+            )
+            return resp.choices[0].message.content or ""
+        except Exception as e:
+            logger.warning(f"LLM 调用失败: {str(e)[:100]}")
+            return str(e)
+    return full or ""  # 后端 流式已启动过，即使 full 为空也返回空字符串，不回退
 
 
 def execute_subtask(subtask: dict) -> str:
@@ -204,9 +232,7 @@ def _try_direct_mode(intent: str, user_input: str, agent_type: str,
             return None  # 后端 提取不到路径，走 function calling 让 LLM 找
         logger.info(f"⚡ 直接模式 读文件: {file_path}")
         file_content = mcp_manager.call("read_file", {"file_path": file_path})
-        system_prompt = WORKER_SYSTEM_PROMPT.format(
-            agent_type=agent_type, current_date=date_str, context="你正在分析一份文件。",
-        )
+        system_prompt = FILE_READING_PROMPT.format(current_date=date_str)
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"{dep_context}请分析以下文件内容并回答用户问题。\n\n用户问题：{user_input}\n\n文件内容：\n{file_content}"},

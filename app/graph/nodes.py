@@ -155,33 +155,15 @@ def node_execute(state: WorkflowState) -> dict:
 
 
 def node_aggregate(state: WorkflowState) -> dict:
-    """后端 节点3：汇总所有子任务结果 → 最终交付物
-
-    单子任务直接复用 Worker 输出，省一次 LLM 汇总调用
-    """
-    from app.core.llm import get_llm_response
-
+    """后端 节点3：汇总所有子任务结果 → 最终交付物"""
     done_tasks = [s for s in state["subtasks"] if s["status"] in ("done", "failed")]
 
-    # 后端 单子任务优化：Worker 输出已格式化，直接当最终结果
-    if len(done_tasks) == 1:
-        final_output = done_tasks[0].get("result", "") or f"任务完成: {done_tasks[0].get('description', '')}"
+    # 暴力破解：无论有几个子任务，只要有结果了，直接拿最后一个（通常是总结节点）的结果。
+    # 彻底砍掉耗时的 get_llm_response 汇总！
+    if done_tasks:
+        final_output = done_tasks[-1].get("result", "") or f"任务完成: {done_tasks[-1].get('description', '')}"
     else:
-        results_text = ""
-        for sub in done_tasks:
-            results_text += f"\n### {sub['id']}: {sub['description']}\n{sub.get('result', '无结果')}\n"
-
-        prompt = f"""把以下结果整理成简洁的最终输出，只讲重点。
-
-用户请求：{state['user_input']}
-
-子任务结果：
-{results_text}
-
-规则：用 Markdown 格式，只输出关键结论/核心数据，不啰嗦。"""
-
-        messages = [{"role": "user", "content": prompt}]
-        final_output = get_llm_response(messages, temperature=0.3, max_tokens=4096)
+        final_output = "任务未生成结果"
 
     return {"final_output": final_output, "current_stage": "done"}
 

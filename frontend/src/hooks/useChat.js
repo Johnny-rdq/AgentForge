@@ -223,6 +223,9 @@ function handleSSEEvent(event, data, msgId, threadId, setAllMessages, setWorkflo
         break
 
       case 'token':
+        // 核心修复：一旦开始流式吐字，立刻隐藏“执行子任务”等思考面板！
+        setWorkflowState(null)
+
         setAllMessages(prev => ({
           ...prev,
           [threadId]: prev[threadId].map(m =>

@@ -1,79 +1,72 @@
-# AgentForge — MCP 多Agent 自主任务系统
+# AgentForge ⚡
 
-基于 **LangGraph + MCP 协议 + FastAPI** 构建的多Agent自主任务执行系统。用户自然语言描述需求，系统自动拆解→动态生成Agent→依赖感知调度→并行执行→自反思修正→交付结果。
-
-## 核心特性
-
-- **动态Agent生成** — 根据任务类型自动创建对应Worker Agent，非固定管线
-- **MCP协议工具标准化** — 所有工具通过MCP Server注册，面试免检
-- **依赖感知并行调度** — 无依赖子任务并行执行，有依赖串行等待
-- **自反思修正** — Agent输出后自动检查质量，不通过则自己修改
-- **CrewAI对比实验** — 同场景下对比LangGraph动态vs CrewAI固定方案
-- **50任务基准评测** — 覆盖数据分析/可视化/代码生成/调研/报告/综合6类
-
-## 架构
-
-```
-用户："分析销售数据，输出报告"
-
-Master Agent
-    │
-    ├── 任务拆解 ──→ 3个子任务
-    │   ├── sub_1: 数据清洗 (data_cleaner)
-    │   ├── sub_2: 统计分析 (analyst)     ← 依赖 sub_1
-    │   └── sub_3: 生成报告 (writer)       ← 依赖 sub_2
-    │
-    ├── 依赖感知调度 ──→ sub_1 就绪
-    │
-    ├── 并行执行 (无依赖的并行) ──→ sub_1 完成
-    │
-    ├── 调度 ──→ sub_2 就绪，执行
-    │
-    ├── 自反思 ──→ sub_2 输出不完整，自动修正
-    │
-    ├── 调度 ──→ sub_3 就绪，执行
-    │
-    └── 汇总交付 ──→ 完整分析报告
-```
-
-## 技术栈
-
-| 层级 | 技术 |
-|------|------|
-| **编排引擎** | LangGraph (StateGraph) + 动态图 |
-| **工具协议** | MCP (Model Context Protocol) |
-| **LLM** | 阿里云 DashScope (qwen-plus) |
-| **Web框架** | FastAPI + SSE 流式 |
-| **Agent记忆** | ChromaDB + SQLite |
-| **对比实验** | CrewAI |
-| **数据处理** | Pandas + Matplotlib |
-| **容器化** | Docker |
+基于 **LangGraph + MCP 协议 + FastAPI** 的多 Agent 自主任务系统。自然语言输入，自动拆解→调度→执行→交付，支持 token 级流式输出。
 
 ## 快速开始
 
+### Docker（推荐）
+
 ```bash
-# 1. 配置环境
+git clone https://github.com/Johnny-rdq/AgentForge.git
+cd AgentForge
 cp .env.example .env
-# 编辑 .env，填入 DASHSCOPE_API_KEY
+# 编辑 .env，填入 LLM_API_KEY
+docker compose up -d
+# 访问 http://localhost:7860
+```
+
+### 本地运行
+
+```bash
+# 1. 环境配置
+cp .env.example .env
+# 编辑 .env 填入 LLM_API_KEY
 
 # 2. 安装依赖
 pip install -r requirements.txt
 
-# 3. 启动服务
-python -m app.main
+# 3. 构建前端
+cd frontend && npm install && npm run build && cd ..
 
-# 4. 测试
-curl -X POST http://localhost:7860/api/v1/chat/stream \
-  -H "Content-Type: application/json" \
-  -d '{"task": "分析这份销售数据CSV，输出统计分析结果"}'
+# 4. 启动
+python -m app.main
+# 访问 http://localhost:7860
 ```
+
+## 架构
+
+```
+用户输入 → 快速通道(regex 分类) → Worker 直接执行 → 流式输出 → 完成
+                ↓ (复杂任务)
+         Master LLM 拆解 → execute ⇄ execute → aggregate → 完成
+```
+
+精简 3 节点 Graph：**decompose → execute（自循环调度）→ aggregate**
+
+## 核心特性
+
+- ⚡ **超级快速通道** — 搜索/读文件/翻译/问答等 90% 场景 regex 秒判，1 次 LLM 调用出结果
+- 📡 **Token 级流式输出** — Worker 线程逐 token 推送，前端实时渲染，哨兵机制确保内容出完立刻结束
+- 🔧 **MCP 协议工具** — 7 个标准化工具（搜索/文件/代码/天气），Agent 工具白名单隔离
+- 🧵 **依赖感知并行** — 无依赖子任务线程池并行执行，有依赖拓扑排序串行
+- 💾 **SQLite 持久化** — 会话 + 任务历史 + 耗时全记录，刷新不丢失
+- 🎛️ **HITL 人工审批** — 可选开启，拆解方案需人工确认后才执行
+- 📎 **文件上传** — PDF/Word/TXT/MD/图片，支持 OCR 解析
+- 🐳 **Docker 一键部署** — `docker compose up -d` 即用
 
 ## API 端点
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/` | 服务状态 |
-| POST | `/api/v1/chat/stream` | SSE流式任务执行 |
+| GET | `/api/v1/health` | 健康检查 |
+| GET | `/api/v1/sessions` | 会话列表 |
+| POST | `/api/v1/sessions` | 创建会话 |
+| GET | `/api/v1/sessions/{id}/messages` | 会话历史消息 |
+| DELETE | `/api/v1/sessions/{id}` | 删除会话 |
+| POST | `/api/v1/chat/stream` | SSE 流式对话 |
+| POST | `/api/v1/chat/resume` | HITL 审批恢复 |
+| POST | `/api/v1/chat/cancel` | 取消任务 |
+| POST | `/api/v1/upload` | 上传文件 |
 
 ### SSE 事件类型
 
@@ -82,66 +75,56 @@ curl -X POST http://localhost:7860/api/v1/chat/stream \
 | `thinking` | 当前执行阶段 |
 | `subtask_update` | 子任务拆解结果 |
 | `token` | 流式输出文本 |
-| `result` | 最终交付结果 |
-| `done` | 任务结束 |
+| `result` | 任务元数据（含耗时） |
+| `done` | 任务结束（含 elapsed） |
 | `error` | 异常信息 |
 
-## 运行评测
+## 配置
 
-```bash
-# 运行50任务基准评测
-python -m app.eval.benchmark
-```
+全部通过 `.env` 环境变量配置：
 
-评测维度：通过率 / 平均耗时 / 质量评分 / 分类通过率
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `LLM_API_KEY` | - | **必填**，LLM API 密钥 |
+| `LLM_MODEL` | `qwen-plus` | 模型名称 |
+| `LLM_PROVIDER` | `agnes` | 服务商（agnes/dashscope/openai） |
+| `MAX_WORKERS` | `6` | 最大并行 Worker 数 |
+| `HITL_ENABLED` | `false` | 人工审批开关 |
+| `REFLECTION_ENABLED` | `false` | 自反思开关 |
+| `WORKFLOW_TIMEOUT` | `300` | 工作流超时秒数 |
 
 ## 项目结构
 
 ```
 AgentForge/
 ├── app/
-│   ├── main.py              # FastAPI 入口
-│   ├── api/chat.py          # SSE 流式端点
+│   ├── main.py              # FastAPI 入口，挂载前端 SPA
+│   ├── api/
+│   │   ├── chat.py          # SSE 流式对话（含快速通道 + 哨兵机制）
+│   │   ├── session.py       # 会话管理 CRUD
+│   │   └── upload.py        # 文件上传
+│   ├── agent/
+│   │   ├── state.py         # LangGraph 工作流状态
+│   │   ├── master.py        # Master 任务拆解 + regex 快速分类
+│   │   └── worker.py        # Worker 执行（直接模式 + FC 模式）
+│   ├── graph/
+│   │   ├── workflow.py      # 精简 3 节点 DAG 组装
+│   │   ├── nodes.py         # decompose / execute(调度+执行) / aggregate
+│   │   └── edges.py         # 条件路由
 │   ├── core/
 │   │   ├── config.py        # 全局配置
-│   │   ├── llm.py           # LLM 实例
-│   │   └── mcp_manager.py   # MCP 工具管理
-│   ├── agent/
-│   │   ├── state.py         # 工作流状态
-│   │   ├── master.py        # Master 任务拆解
-│   │   ├── worker.py        # Worker 动态执行
-│   │   └── reflector.py     # 自反思修正
-│   ├── graph/
-│   │   ├── workflow.py      # 图组装
-│   │   ├── nodes.py         # 图节点
-│   │   └── edges.py         # 条件路由
+│   │   ├── llm.py           # LLM 客户端（流式 + 非流式）
+│   │   └── mcp_manager.py   # MCP 工具注册中心
 │   ├── tools/
-│   │   ├── mcp_server.py    # MCP 注册入口
-│   │   ├── file_tools.py    # 文件工具
-│   │   ├── code_tools.py    # 代码执行
-│   │   └── search_tools.py  # 搜索工具
+│   │   ├── file_tools.py    # 文件读写 + OCR
+│   │   ├── code_tools.py    # Python 沙箱执行
+│   │   └── search_tools.py  # 网络搜索
 │   ├── memory/
-│   │   ├── vector_store.py  # ChromaDB 语义记忆
-│   │   └── sql_store.py     # SQLite 结构化记忆
-│   ├── eval/
-│   │   ├── benchmark.py     # 评测跑分器
-│   │   └── tasks.py         # 50标准任务集
-│   └── models/schemas.py    # 数据模型
-├── crewai_version/          # CrewAI 对比实验
-├── frontend/                # React 前端
-├── data/                    # 运行时数据
+│   │   ├── sql_store.py     # SQLite 会话/任务历史
+│   │   └── vector_store.py  # ChromaDB 语义记忆
+│   └── models/schemas.py    # Pydantic 数据模型
+├── frontend/                # React + TailwindCSS 前端
 ├── Dockerfile
 ├── docker-compose.yml
 └── requirements.txt
 ```
-
-## 与旧项目差异
-
-| | Enterprise_Agent_System | AgentForge |
-|---|---|---|
-| Agent生成 | 固定4角色管线 | **动态按需生成** |
-| 执行模式 | 线性排队 | **依赖感知并行** |
-| 工具标准化 | 硬编码函数 | **MCP协议** |
-| 质量控制 | 外部审核Agent | **自反思+外检** |
-| 方案对比 | 无 | **CrewAI对照实验** |
-| 基准评测 | 无 | **50任务自动化跑分** |

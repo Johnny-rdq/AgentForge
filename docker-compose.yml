@@ -1,6 +1,4 @@
-# 后端 Docker Compose 编排
-version: "3.8"
-
+# 后端 Docker Compose 一键部署
 services:
   agentforge:
     build: .
@@ -8,15 +6,21 @@ services:
     ports:
       - "7860:7860"
     environment:
+      # 后端 LLM 配置（必填）
       - LLM_API_KEY=${LLM_API_KEY}
-      - LLM_MODEL=${LLM_MODEL:-agnes-2.0-flash}
-      - LLM_BASE_URL=${LLM_BASE_URL:-https://apihub.agnes-ai.com/v1}
+      - LLM_MODEL=${LLM_MODEL:-qwen-plus}
       - LLM_PROVIDER=${LLM_PROVIDER:-agnes}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      # 后端 容器环境默认关闭人工审批（无前端交互）
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://apihub.agnes-ai.com/v1}
+      # 后端 搜索配置（可选，不配则用内置搜索）
+      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
+      # 后端 Agent 配置
+      - MAX_WORKERS=${MAX_WORKERS:-6}
       - HITL_ENABLED=${HITL_ENABLED:-false}
-      - REFLECTION_ENABLED=${REFLECTION_ENABLED:-true}
+      - REFLECTION_ENABLED=${REFLECTION_ENABLED:-false}
+      - WORKFLOW_TIMEOUT=${WORKFLOW_TIMEOUT:-300}
+      # 后端 日志
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
-      - ./data:/app/data   # 后端 数据库 + 报告持久化
-      - ./logs:/app/logs   # 后端 日志持久化
+      - ./data:/app/data   # 后端 数据库 + 上传文件持久化
+      - ./logs:/app/logs    # 后端 日志持久化
     restart: unless-stopped

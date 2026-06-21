@@ -113,21 +113,42 @@ async def _execute_and_stream(task_input: str, thread_id: str = "default_session
         future = wf_executor.submit(run_worker)
         has_streamed = False
 
-        # 后端 轮询：排空 token → 检查 Worker 是否完成 → 完成则立即退出
+        # 后端 轮询：排空 token → 看到哨兵或 Worker 完成 → 确保拿到结果再退出
         while True:
+            sentinel_seen = False
             while True:
                 try:
                     token = token_queue.get_nowait()
-                    yield _sse("token", token)
-                    has_streamed = True
+                    if token is None:  # 后端 哨兵：LLM 流式已完成
+                        sentinel_seen = True
+                    else:
+                        yield _sse("token", token)
+                        has_streamed = True
                 except queue.Empty:
                     break
+            if sentinel_seen:
+                # 后端 等 Worker 真正结束再读结果（防止流式中断后的非流式回退还没跑完）
+                try:
+                    future.result(timeout=30)
+                except Exception:
+                    pass
+                # 后端 排空 Worker 结束后可能残余的 token
+                while True:
+                    try:
+                        token = token_queue.get_nowait()
+                        if token is not None:
+                            yield _sse("token", token)
+                            has_streamed = True
+                    except queue.Empty:
+                        break
+                break
             if future.done():
                 while True:
                     try:
                         token = token_queue.get_nowait()
-                        yield _sse("token", token)
-                        has_streamed = True
+                        if token is not None:
+                            yield _sse("token", token)
+                            has_streamed = True
                     except queue.Empty:
                         break
                 break
@@ -190,45 +211,87 @@ async def _execute_and_stream(task_input: str, thread_id: str = "default_session
     has_streamed = False
     aborted = False
     done_sent = False
+    streaming_complete = False  # 后端 收到哨兵后置 True，触发立即退出
     # 后端 缓存第一个有 Worker 结果的 state，token 流完后用于提前结束
     _worker_result_state = None
 
     try:
         while True:
-            # 后端 优先排空 token 队列
+            # 后端 步骤1：排空 token 队列（含哨兵检测）
             token_drained = False
             while True:
                 try:
                     token = token_queue.get_nowait()
+                    if token is None:  # 后端 哨兵：Worker LLM 流式已完成
+                        streaming_complete = True
+                        continue
                     yield _sse("token", token)
                     has_streamed = True
                     token_drained = True
                 except queue.Empty:
                     break
 
-            # 后端 取下一个步骤事件
+            # 后端 步骤2：哨兵已到 → 快速收尾，不等 graph 后续节点
+            if streaming_complete and not done_sent:
+                done_sent = True
+                # 后端 等 graph 线程把 execute 节点的 step 发过来（最长 5 秒）
+                deadline = time.time() + 5.0
+                while time.time() < deadline:
+                    try:
+                        msg_type, payload = await asyncio.wait_for(step_queue.get(), timeout=0.5)
+                        if msg_type == "step":
+                            for ns in payload.values():
+                                for s in ns.get("subtasks", []):
+                                    if s.get("result") and s["status"] in ("done", "failed"):
+                                        _worker_result_state = payload
+                                        break
+                            if _worker_result_state is not None:
+                                break  # 后端 拿到 Worker 结果了，退出等待
+                        elif msg_type == "graph_done":
+                            break
+                    except asyncio.TimeoutError:
+                        continue
+
+                fout, slist = _extract_output(_worker_result_state) if _worker_result_state else ("", [])
+                elapsed = time.time() - start_time
+                logger.info(f"⚡ 哨兵提前结束: {task_id}, 耗时 {elapsed:.1f}s")
+                if fout:
+                    _bg_persist(elapsed, task_id, thread_id, task_input, fout, slist, files_json)
+                    _save_conversation(thread_id, task_input, fout)
+                else:
+                    _bg_persist(elapsed, task_id, thread_id, task_input, "(处理中)", slist, files_json)
+                worker_mod._token_bridge = None
+                executor.shutdown(wait=False)
+                yield _sse("result", {"output": "", "task_id": task_id, "subtask_count": len(slist), "streamed": True, "elapsed_ms": int(elapsed * 1000)})
+                yield _sse("done", {"elapsed": round(elapsed, 1)})
+                return
+
+            # 后端 步骤3：取下一个步骤事件（含超时）
             try:
                 msg_type, payload = await asyncio.wait_for(step_queue.get(), timeout=0.03 if token_drained else 0.15)
             except asyncio.TimeoutError:
-                # 后端 token 已全部输出 + 有 Worker 结果 → 提前结束，不让前端等
+                # 后端 旧版兼容：token 已全部输出 + 有 Worker 结果 → 提前结束
                 if has_streamed and not done_sent and _worker_result_state is not None:
                     fout, slist = _extract_output(_worker_result_state)
                     if fout:
+                        done_sent = True
                         elapsed = time.time() - start_time
-                        logger.info(f"⚡ 提前结束(token流完): {task_id}, 耗时 {elapsed:.1f}s")
+                        logger.info(f"⚡ 提前结束(超时检测): {task_id}, 耗时 {elapsed:.1f}s")
                         _bg_persist(elapsed, task_id, thread_id, task_input, fout, slist, files_json)
                         _save_conversation(thread_id, task_input, fout)
                         worker_mod._token_bridge = None
                         executor.shutdown(wait=False)
+                        yield _sse("result", {"output": "", "task_id": task_id, "subtask_count": len(slist), "streamed": True, "elapsed_ms": int(elapsed * 1000)})
                         yield _sse("done", {"elapsed": round(elapsed, 1)})
                         return
                 continue
 
+            # 后端 步骤4：处理步骤事件
             if msg_type == "graph_done":
                 break
             elif msg_type == "timeout":
-                logger.warning(f"工作流超时: {task_id} (>{settings.workflow_timeout}s)")
-                yield _sse("error", {"message": f"任务执行超时（>{settings.workflow_timeout}秒），请简化任务重试"})
+                logger.warning(f"工作流超时: {task_id}")
+                yield _sse("error", {"message": f"任务执行超时，请简化任务重试"})
                 aborted = True
                 return
             elif msg_type == "cancelled":
@@ -241,7 +304,7 @@ async def _execute_and_stream(task_input: str, thread_id: str = "default_session
                 raise payload
             elif msg_type == "step":
                 step_output = payload
-                # 后端 缓存第一个包含 Worker 结果的状态（用于提前结束）
+                # 后端 缓存第一个包含 Worker 结果的状态
                 if _worker_result_state is None:
                     for ns in step_output.values():
                         for s in ns.get("subtasks", []):
@@ -457,23 +520,22 @@ def _extract_output(state: dict) -> tuple:
 
 def _bg_persist(elapsed_s: float, task_id: str, thread_id: str, task_input: str,
                 final_output: str, subtask_list: list, files_json: str):
-    """后端 后台线程写 SQLite，不阻塞 SSE 响应"""
-    def _do():
-        try:
-            import re
-            elapsed_ms = int(elapsed_s * 1000)
-            clean_input = re.sub(r'\n*[（(]用户上传了文件[^)）]+[)）]', '', task_input)
-            clean_input = re.sub(r'\n*\[用户上传了文件[^\]]+\]', '', clean_input)
-            clean_input = clean_input.strip()
-            sql_memory.save_task(
-                task_id=task_id, thread_id=thread_id,
-                user_input=clean_input, subtasks=subtask_list,
-                final_output=final_output, status="completed",
-                files_json=files_json, elapsed_ms=elapsed_ms,
-            )
-        except Exception as e:
-            logger.error(f"保存任务失败: {e}")
-    ThreadPoolExecutor(max_workers=1).submit(_do)
+    """后端 同步写 SQLite（INSERT < 5ms，不需要后台线程，避免数据丢失）"""
+    try:
+        import re
+        elapsed_ms = int(elapsed_s * 1000)
+        clean_input = re.sub(r'\n*[（(]用户上传了文件[^)）]+[)）]', '', task_input)
+        clean_input = re.sub(r'\n*\[用户上传了文件[^\]]+\]', '', clean_input)
+        clean_input = clean_input.strip()
+        sql_memory.save_task(
+            task_id=task_id, thread_id=thread_id,
+            user_input=clean_input, subtasks=subtask_list,
+            final_output=final_output, status="completed",
+            files_json=files_json, elapsed_ms=elapsed_ms,
+        )
+        logger.debug(f"任务已存库: {task_id} ({elapsed_ms}ms)")
+    except Exception as e:
+        logger.error(f"保存任务失败: {e}")
 
 
 def _save_conversation(thread_id: str, task_input: str, final_output: str):

@@ -67,6 +67,15 @@ def _fast_path(user_input: str) -> list[dict] | None:
                  "depends_on": [], "status": "pending", "result": None, "retries": 0,
                  "_intent": "翻译文本"}]
 
+    # 后端 通用知识问答：介绍/区别/怎么/为什么/是什么 → researcher 一步到位
+    if re.search(r'(什么|怎么|如何|介绍|说明|解释|为什么|区别|对比|优缺点|定义|概念)', inp) \
+       and not re.search(r'(文件|文档|PDF|翻译|写.*代码|画|图|编程|开发)', inp) \
+       and len(inp) < 200:
+        logger.info(f"⚡ 快速通道 → researcher(Q&A): {inp[:40]}")
+        return [{"id": "sub_1", "description": inp, "agent_type": "researcher",
+                 "depends_on": [], "status": "pending", "result": None, "retries": 0,
+                 "_intent": "搜索最新信息"}]
+
     # 后端 纯编程意图
     if re.search(r'(写|编写|实现|开发|代码|程序|脚本|函数|debug|修.*bug)', inp) \
        and not re.search(r'(搜|查|文件|PDF|文档|翻译)', inp):

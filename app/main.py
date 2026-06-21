@@ -17,16 +17,18 @@ from app.tools.mcp_server import register_all_tools
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 后端 启动时注册 MCP 工具，关闭时清理资源
+    # 后端 启动时注册 MCP 工具、创建运行时目录
     register_all_tools()
+    os.makedirs(os.path.join(os.path.dirname(__file__), "..", "data", "uploads"), exist_ok=True)
+    os.makedirs(os.path.join(os.path.dirname(__file__), "..", "logs"), exist_ok=True)
     app_logger.info(f"AgentForge 启动: http://localhost:{settings.app_port}")
     yield
     app_logger.info("AgentForge 关闭")
 
 
 app = FastAPI(
-    title="AgentForge - 多Agent自主任务系统",
-    description="动态Agent生成 + MCP工具协议 + 依赖感知并行调度 + 自反思修正",
+    title="AgentForge - AI 智能助手",
+    description="MCP 多Agent 自主任务系统 — 自然语言驱动，自动拆解→执行→交付",
     version="1.0.0",
     lifespan=lifespan,
 )

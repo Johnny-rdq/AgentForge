@@ -2,6 +2,7 @@
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 sse-starlette>=1.8.0
+python-multipart>=0.0.9
 
 # 后端 Agent 编排
 langgraph>=0.2.0

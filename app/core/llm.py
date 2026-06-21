@@ -31,5 +31,5 @@ def get_llm_stream(messages: list, temperature: float = None, max_tokens: int = 
         stream=True,
     )
     for chunk in stream:
-        if chunk.choices[0].delta.content:
+        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
             yield chunk.choices[0].delta.content
