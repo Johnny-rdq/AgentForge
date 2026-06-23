@@ -56,5 +56,6 @@ def get_agent_graph() -> StateGraph:
     if agent_graph is None:
         workflow = build_workflow()
         agent_graph = workflow.compile(checkpointer=checkpointer)
-        logger.info("多Agent工作流图已编译（精简 3 节点）")
+        node_count = 4 if settings.hitl_enabled else 3
+        logger.info(f"多Agent工作流图已编译（{node_count} 节点）")
     return agent_graph

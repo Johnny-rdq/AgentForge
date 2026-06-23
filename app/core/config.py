@@ -8,6 +8,7 @@ _PROVIDER_BASE_URLS = {
     "agnes": "https://apihub.agnes-ai.com/v1",
     "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "openai": "https://api.openai.com/v1",
+    "deepseek": "https://api.deepseek.com/v1",
 }
 
 class Settings(BaseSettings):

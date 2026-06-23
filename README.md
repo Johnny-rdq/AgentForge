@@ -1,6 +1,6 @@
 # AgentForge ⚡
 
-基于 **LangGraph + MCP 协议 + FastAPI** 的多 Agent 自主任务系统。自然语言输入，自动拆解→调度→执行→交付，支持 token 级流式输出。
+基于 **LangGraph + MCP 协议 + FastAPI** 的多 Agent 自主任务系统。自然语言输入 → 自动拆解 → 并行执行 → 汇总交付，支持 token 级流式 SSE 输出。
 
 ## 快速开始
 
@@ -33,26 +33,53 @@ python -m app.main
 # 访问 http://localhost:7860
 ```
 
-## 架构
+## 执行流程
 
 ```
-用户输入 → 快速通道(regex 分类) → Worker 直接执行 → 流式输出 → 完成
-                ↓ (复杂任务)
-         Master LLM 拆解 → execute ⇄ execute → aggregate → 完成
+用户输入
+  ↓
+Master LLM 拆解 → 子任务列表
+  ↓
+[人工审批] ← 侧边栏一键开关，运行时动态切换
+  ↓
+线程池并行执行（依赖感知调度）
+  ↓  ← execute 自循环，直到全部完成
+Reflector 质量审查（可选）
+  ↓
+LLM 汇总合成最终报告
+  ↓
+SSE 流式输出（token 级实时渲染）
 ```
 
-精简 3 节点 Graph：**decompose → execute（自循环调度）→ aggregate**
+**4 节点 LangGraph DAG**：`decompose → [human_review] → execute ⇄ execute → aggregate → END`
 
 ## 核心特性
 
-- ⚡ **超级快速通道** — 搜索/读文件/翻译/问答等 90% 场景 regex 秒判，1 次 LLM 调用出结果
-- 📡 **Token 级流式输出** — Worker 线程逐 token 推送，前端实时渲染，哨兵机制确保内容出完立刻结束
-- 🔧 **MCP 协议工具** — 7 个标准化工具（搜索/文件/代码/天气），Agent 工具白名单隔离
-- 🧵 **依赖感知并行** — 无依赖子任务线程池并行执行，有依赖拓扑排序串行
-- 💾 **SQLite 持久化** — 会话 + 任务历史 + 耗时全记录，刷新不丢失
-- 🎛️ **HITL 人工审批** — 可选开启，拆解方案需人工确认后才执行
-- 📎 **文件上传** — PDF/Word/TXT/MD/图片，支持 OCR 解析
+- 🧠 **LLM 拆解** — Master Agent 分析意图，自动拆解为类型化子任务
+- 🔀 **依赖感知并行** — 无依赖子任务线程池并行，有依赖拓扑排序，execute 节点自循环调度
+- 📡 **Token 级流式** — Worker 线程逐 token 推送 SSE，哨兵机制即时结束
+- 🔧 **MCP 协议工具** — 7 个标准化工具（搜索/文件/代码/天气），Agent 白名单隔离
+- 🛡️ **安全沙箱** — Python 代码 AST 扫描拦截 + 子进程隔离执行
+- 📎 **文件分析** — 上传 PDF/Word/TXT/MD，自动预读内容注入 LLM，图表生成自动挂载
+- 🔍 **Reflector** — 可选质量审查，执行结果自动校验修正（最多 1 次）
+- 🎛️ **HITL 人工审批** — 侧边栏一键开关，拆解方案暂停确认后才执行
+- 💾 **SQLite + ChromaDB** — 会话历史 + 向量记忆，重启不丢失
 - 🐳 **Docker 一键部署** — `docker compose up -d` 即用
+
+## Agent 类型
+
+| Agent | 工具 | 说明 |
+|-------|------|------|
+| `researcher` | 搜索 / 天气 / 读文件 | 信息调研 |
+| `coder` | 执行 Python / 安装包 / 读写文件 | 代码生成 |
+| `analyst` | 执行 Python / 读文件 / 搜索 | 数据分析 |
+| `visualizer` | 执行 Python | 图表生成（matplotlib） |
+| `data_cleaner` | 执行 Python / 读文件 | 数据清洗 |
+| `writer` | 读文件 | 文档撰写 |
+| `executor` | 执行 Python / 安装包 | 代码执行 |
+| `tester` | 执行 Python / 读文件 | 测试代码 |
+| `reviewer` | 读文件 | 代码审查 |
+| `translator` | — | 翻译 |
 
 ## API 端点
 
@@ -67,6 +94,8 @@ python -m app.main
 | POST | `/api/v1/chat/resume` | HITL 审批恢复 |
 | POST | `/api/v1/chat/cancel` | 取消任务 |
 | POST | `/api/v1/upload` | 上传文件 |
+| GET | `/api/v1/settings/hitl` | 获取 HITL 状态 |
+| POST | `/api/v1/settings/hitl` | 切换 HITL 开关 |
 
 ### SSE 事件类型
 
@@ -75,7 +104,8 @@ python -m app.main
 | `thinking` | 当前执行阶段 |
 | `subtask_update` | 子任务拆解结果 |
 | `token` | 流式输出文本 |
-| `result` | 任务元数据（含耗时） |
+| `review_required` | HITL 审批请求（含子任务计划） |
+| `result` | 最终结果元数据 |
 | `done` | 任务结束（含 elapsed） |
 | `error` | 异常信息 |
 
@@ -87,10 +117,11 @@ python -m app.main
 |------|--------|------|
 | `LLM_API_KEY` | - | **必填**，LLM API 密钥 |
 | `LLM_MODEL` | `qwen-plus` | 模型名称 |
-| `LLM_PROVIDER` | `agnes` | 服务商（agnes/dashscope/openai） |
+| `LLM_PROVIDER` | `agnes` | 服务商（agnes / dashscope / openai / deepseek） |
+| `LLM_BASE_URL` | 自动匹配 | 自定义 API 地址（覆盖 provider 默认值） |
 | `MAX_WORKERS` | `6` | 最大并行 Worker 数 |
-| `HITL_ENABLED` | `false` | 人工审批开关 |
-| `REFLECTION_ENABLED` | `false` | 自反思开关 |
+| `HITL_ENABLED` | `false` | 人工审批（侧边栏可运行时切换） |
+| `REFLECTION_ENABLED` | `false` | Reflector 自反思审查 |
 | `WORKFLOW_TIMEOUT` | `300` | 工作流超时秒数 |
 
 ## 项目结构
@@ -98,32 +129,42 @@ python -m app.main
 ```
 AgentForge/
 ├── app/
-│   ├── main.py              # FastAPI 入口，挂载前端 SPA
+│   ├── main.py              # FastAPI 入口 + 静态挂载
 │   ├── api/
-│   │   ├── chat.py          # SSE 流式对话（含快速通道 + 哨兵机制）
-│   │   ├── session.py       # 会话管理 CRUD
-│   │   └── upload.py        # 文件上传
+│   │   ├── chat.py          # SSE 流式对话 + HITL 审批 + 设置接口
+│   │   ├── session.py       # 会话 CRUD
+│   │   ├── upload.py        # 文件上传
+│   │   └── benchmark_api.py # 评测 API
 │   ├── agent/
-│   │   ├── state.py         # LangGraph 工作流状态
-│   │   ├── master.py        # Master 任务拆解 + regex 快速分类
-│   │   └── worker.py        # Worker 执行（直接模式 + FC 模式）
+│   │   ├── state.py         # LangGraph WorkflowState 定义
+│   │   ├── master.py        # Master LLM 任务拆解
+│   │   ├── worker.py        # Worker 执行（直接模式 + FC 模式）
+│   │   └── reflector.py     # Reflector 质量审查修正
 │   ├── graph/
-│   │   ├── workflow.py      # 精简 3 节点 DAG 组装
-│   │   ├── nodes.py         # decompose / execute(调度+执行) / aggregate
-│   │   └── edges.py         # 条件路由
+│   │   ├── workflow.py      # 4 节点 DAG 组装 + MemorySaver
+│   │   ├── nodes.py         # decompose / human_review / execute / aggregate
+│   │   └── edges.py         # execute 自循环条件路由
 │   ├── core/
-│   │   ├── config.py        # 全局配置
-│   │   ├── llm.py           # LLM 客户端（流式 + 非流式）
+│   │   ├── config.py        # 全局配置（多 Provider）
+│   │   ├── llm.py           # OpenAI 兼容 LLM 客户端
 │   │   └── mcp_manager.py   # MCP 工具注册中心
 │   ├── tools/
-│   │   ├── file_tools.py    # 文件读写 + OCR
-│   │   ├── code_tools.py    # Python 沙箱执行
-│   │   └── search_tools.py  # 网络搜索
+│   │   ├── mcp_server.py    # MCP 工具注册入口
+│   │   ├── file_tools.py    # 文件读写 + PDF OCR
+│   │   ├── code_tools.py    # Python AST 安全沙箱
+│   │   └── search_tools.py  # Tavily 搜索 + 天气
 │   ├── memory/
-│   │   ├── sql_store.py     # SQLite 会话/任务历史
-│   │   └── vector_store.py  # ChromaDB 语义记忆
+│   │   ├── sql_store.py     # SQLite 会话/任务持久化
+│   │   └── vector_store.py  # ChromaDB 向量记忆
+│   ├── eval/
+│   │   ├── tasks.py         # 50 个标准评测任务
+│   │   └── benchmark.py     # 评测执行引擎
 │   └── models/schemas.py    # Pydantic 数据模型
-├── frontend/                # React + TailwindCSS 前端
+├── frontend/                # React + TailwindCSS SPA
+├── data/
+│   ├── uploads/             # 用户上传文件
+│   ├── generated/           # 图表等生成文件（挂载 /generated）
+│   └── chroma_db/           # ChromaDB 持久化
 ├── Dockerfile
 ├── docker-compose.yml
 └── requirements.txt

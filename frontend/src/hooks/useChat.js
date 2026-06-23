@@ -6,6 +6,7 @@ export default function useChat(activeSessionId) {
   const [workflowState, setWorkflowState] = useState(null)
   const [workflowSessionId, setWorkflowSessionId] = useState(null)
   const abortRef = useRef(null)
+  const needsApprovalRef = useRef(false)
 
   const messages = allMessages[activeSessionId] || []
 
@@ -81,6 +82,7 @@ export default function useChat(activeSessionId) {
     setIsStreaming(true)
     setWorkflowState({ stage: 'decompose', message: '正在分析任务...', subtasks: [] })
     setWorkflowSessionId(threadId)
+    needsApprovalRef.current = false
 
     const controller = new AbortController()
     abortRef.current = controller
@@ -111,7 +113,7 @@ export default function useChat(activeSessionId) {
             currentEvent = line.slice(7).trim()
           } else if (line.startsWith('data: ')) {
             const data = line.slice(6)
-            handleSSEEvent(currentEvent, data, assistantMsg.id, threadId, setAllMessages, setWorkflowState, setIsStreaming)
+            handleSSEEvent(currentEvent, data, assistantMsg.id, threadId, setAllMessages, setWorkflowState, setIsStreaming, needsApprovalRef)
           }
         }
       }
@@ -126,14 +128,24 @@ export default function useChat(activeSessionId) {
       }
     } finally {
       setIsStreaming(false)
-      setWorkflowState(null)
-      setWorkflowSessionId(null)
-      setAllMessages(prev => ({
-        ...prev,
-        [threadId]: prev[threadId].map(m =>
-          m.id === assistantMsg.id ? { ...m, isStreaming: false } : m
-        )
-      }))
+      if (needsApprovalRef.current) {
+        // 后端 审批模式：保留 state 等待用户操作，只更新消息流式状态
+        setAllMessages(prev => ({
+          ...prev,
+          [threadId]: prev[threadId].map(m =>
+            m.id === assistantMsg.id ? { ...m, isStreaming: false } : m
+          )
+        }))
+      } else {
+        setWorkflowState(null)
+        setWorkflowSessionId(null)
+        setAllMessages(prev => ({
+          ...prev,
+          [threadId]: prev[threadId].map(m =>
+            m.id === assistantMsg.id ? { ...m, isStreaming: false } : m
+          )
+        }))
+      }
     }
   }, [isStreaming])
 
@@ -142,6 +154,7 @@ export default function useChat(activeSessionId) {
     setIsStreaming(false)
     setWorkflowState(null)
     setWorkflowSessionId(null)
+    needsApprovalRef.current = false
   }, [])
 
   const approveTask = useCallback(async (taskId, action, modifications) => {
@@ -155,12 +168,13 @@ export default function useChat(activeSessionId) {
     setIsStreaming(true)
     setWorkflowState({ stage: 'execute', message: '审批通过，开始执行...', subtasks: [] })
     setWorkflowSessionId(threadId)
+    needsApprovalRef.current = false
 
     try {
       const resp = await fetch('/api/v1/chat/resume', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task_id: taskId, action, subtasks: modifications }),
+        body: JSON.stringify({ task_id: taskId, thread_id: threadId, action, subtasks: modifications }),
       })
 
       const reader = resp.body.getReader()
@@ -178,7 +192,7 @@ export default function useChat(activeSessionId) {
           if (line.startsWith('event: ')) {
             currentEvent = line.slice(7).trim()
           } else if (line.startsWith('data: ')) {
-            handleSSEEvent(currentEvent, line.slice(6), msgId, threadId, setAllMessages, setWorkflowState, setIsStreaming)
+            handleSSEEvent(currentEvent, line.slice(6), msgId, threadId, setAllMessages, setWorkflowState, setIsStreaming, needsApprovalRef)
           }
         }
       }
@@ -198,7 +212,7 @@ export default function useChat(activeSessionId) {
   return { messages, isStreaming, workflowState, workflowSessionId, sendMessage, stopStreaming, loadHistory, approveTask }
 }
 
-function handleSSEEvent(event, data, msgId, threadId, setAllMessages, setWorkflowState, setIsStreaming) {
+function handleSSEEvent(event, data, msgId, threadId, setAllMessages, setWorkflowState, setIsStreaming, needsApprovalRef) {
   try {
     const parsed = JSON.parse(data)
     if (typeof parsed === 'string') {
@@ -247,6 +261,7 @@ function handleSSEEvent(event, data, msgId, threadId, setAllMessages, setWorkflo
         break
 
       case 'review_required':
+        needsApprovalRef.current = true
         setWorkflowState({
           stage: 'review',
           message: parsed.message || '请审批子任务方案',

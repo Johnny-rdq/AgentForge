@@ -38,62 +38,8 @@ MASTER_SYSTEM_PROMPT = """你是任务拆解专家。先理解用户意图，再
 - 禁止编造 Agent 类型"""
 
 
-def _fast_path(user_input: str) -> list[dict] | None:
-    """后端 简单任务快速分类：省一次 Master LLM 调用（省 2-3 秒）"""
-    inp = user_input.strip()
-
-    # 后端 纯搜索意图：搜新闻/查消息/找资料
-    if re.search(r'(搜|查|找|最新|新闻|消息|动态|发生|世界杯|天气|今天|明天)', inp) \
-       and not re.search(r'(文件|文档|PDF|代码|写|画|分析|统计|翻译)', inp):
-        logger.info(f"⚡ 快速通道 → researcher: {inp[:40]}")
-        return [{"id": "sub_1", "description": inp, "agent_type": "researcher",
-                 "depends_on": [], "status": "pending", "result": None, "retries": 0,
-                 "_intent": "搜索最新信息"}]
-
-    # 后端 读文件意图：读/解析/总结文档
-    if re.search(r'(读|查看|解析|阅读|分析|总结|概括|看看|帮我).*(文件|文档|PDF|报告|简历|合同|文章|这个|一下)', inp) \
-       or re.search(r'(这个|这份|这篇).*(文件|文档|PDF|报告)', inp) \
-       or re.search(r'\.(pdf|docx|txt|md|csv)\b', inp, re.IGNORECASE):
-        logger.info(f"⚡ 快速通道 → researcher(读文件): {inp[:40]}")
-        return [{"id": "sub_1", "description": inp, "agent_type": "researcher",
-                 "depends_on": [], "status": "pending", "result": None, "retries": 0,
-                 "_intent": "读取并分析文件内容"}]
-
-    # 后端 翻译意图
-    if re.search(r'(翻译|translate|翻成|译成)', inp) \
-       and not re.search(r'(搜|查|文件|代码|写|画)', inp):
-        logger.info(f"⚡ 快速通道 → translator: {inp[:40]}")
-        return [{"id": "sub_1", "description": inp, "agent_type": "translator",
-                 "depends_on": [], "status": "pending", "result": None, "retries": 0,
-                 "_intent": "翻译文本"}]
-
-    # 后端 通用知识问答：介绍/区别/怎么/为什么/是什么 → researcher 一步到位
-    if re.search(r'(什么|怎么|如何|介绍|说明|解释|为什么|区别|对比|优缺点|定义|概念)', inp) \
-       and not re.search(r'(文件|文档|PDF|翻译|写.*代码|画|图|编程|开发)', inp) \
-       and len(inp) < 200:
-        logger.info(f"⚡ 快速通道 → researcher(Q&A): {inp[:40]}")
-        return [{"id": "sub_1", "description": inp, "agent_type": "researcher",
-                 "depends_on": [], "status": "pending", "result": None, "retries": 0,
-                 "_intent": "搜索最新信息"}]
-
-    # 后端 纯编程意图
-    if re.search(r'(写|编写|实现|开发|代码|程序|脚本|函数|debug|修.*bug)', inp) \
-       and not re.search(r'(搜|查|文件|PDF|文档|翻译)', inp):
-        logger.info(f"⚡ 快速通道 → coder: {inp[:40]}")
-        return [{"id": "sub_1", "description": inp, "agent_type": "coder",
-                 "depends_on": [], "status": "pending", "result": None, "retries": 0,
-                 "_intent": "编写代码"}]
-
-    return None  # 后端 复杂/模糊任务 → 走 Master LLM
-
-
 def decompose_task(user_input: str, conversation_history: list[dict] = None) -> list[dict]:
-    """后端 Master 核心：将用户任务拆解为子任务列表（简单任务走快速通道）"""
-
-    # 后端 快速通道：简单单意图任务跳过 LLM 拆解，省 2-3 秒
-    fast_result = _fast_path(user_input)
-    if fast_result:
-        return fast_result
+    """后端 Master 核心：将用户任务拆解为子任务列表"""
 
     agent_types = get_available_agent_types()
 

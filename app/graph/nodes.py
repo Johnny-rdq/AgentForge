@@ -5,6 +5,8 @@ from app.core.logger import get_logger
 from app.agent.state import WorkflowState, SubtaskDef
 from app.agent.master import decompose_task
 from app.agent.worker import execute_subtask
+from app.agent.reflector import reflect_and_fix
+from app.core.llm import get_llm_response
 from app.core.config import settings
 
 logger = get_logger(__name__)
@@ -106,13 +108,25 @@ def node_execute(state: WorkflowState) -> dict:
     running = [s for s in subtasks if s["status"] == "running"]
     logger.info(f"调度+执行 {len(running)} 个子任务: {[t['id'] for t in running]}")
 
-    # 后端 步骤2：线程池并行执行
+    # 后端 步骤2：线程池并行执行（含 Reflector 质量审查）
     def run_one(sub):
         enriched_sub = dict(sub)
         enriched_sub["_dep_results"] = _get_dependency_results(sub, subtasks)
+        enriched_sub["_original_input"] = state.get("user_input", "")  # 后端 传递原始输入，Worker 可提取文件路径
+        enriched_sub["_history"] = state.get("conversation_history", [])  # 后端 传递对话历史，Worker 可从中提取之前上传的文件路径
         try:
             result = execute_subtask(enriched_sub)
-            enriched_sub["result"] = result
+            # 后端 Reflector 轻量审查：可通过 REFLECTION_ENABLED 环境变量控制开关
+            if settings.reflection_enabled:
+                reviewed_result, fix_attempts = reflect_and_fix(
+                    {"result": result, "description": sub.get("description", "")},
+                    max_retries=1,
+                )
+                if fix_attempts > 0:
+                    logger.info(f"Reflector 修正了 {sub['id']} 的输出（{fix_attempts}次）")
+            else:
+                reviewed_result = result
+            enriched_sub["result"] = reviewed_result
             enriched_sub["status"] = "done"
         except Exception as e:
             logger.error(f"子任务执行失败 {sub['id']}: {str(e)[:100]}")
@@ -155,15 +169,52 @@ def node_execute(state: WorkflowState) -> dict:
 
 
 def node_aggregate(state: WorkflowState) -> dict:
-    """后端 节点3：汇总所有子任务结果 → 最终交付物"""
+    """后端 节点3：汇总所有子任务结果 → 最终交付报告"""
     done_tasks = [s for s in state["subtasks"] if s["status"] in ("done", "failed")]
 
-    # 暴力破解：无论有几个子任务，只要有结果了，直接拿最后一个（通常是总结节点）的结果。
-    # 彻底砍掉耗时的 get_llm_response 汇总！
-    if done_tasks:
-        final_output = done_tasks[-1].get("result", "") or f"任务完成: {done_tasks[-1].get('description', '')}"
-    else:
-        final_output = "任务未生成结果"
+    if not done_tasks:
+        return {"final_output": "任务未生成结果", "current_stage": "done"}
+
+    # 后端 只有 1 个子任务 → 直接返回，无需 LLM 汇总
+    if len(done_tasks) == 1:
+        final_output = done_tasks[0].get("result", "") or "任务完成"
+        return {"final_output": final_output, "current_stage": "done"}
+
+    # 后端 多子任务 → 组装所有结果，调 LLM 合成一份完整报告
+    parts = []
+    for s in done_tasks:
+        status_tag = "✓" if s["status"] == "done" else "✗"
+        result_text = s.get("result", "") or "(无输出)"
+        parts.append(f"### [{status_tag}] {s.get('description', s['id'])}\n\n{result_text}")
+    all_results = "\n\n---\n\n".join(parts)
+
+    aggregate_prompt = f"""请将以下多个子任务的执行结果，整合成一份完整、连贯的最终交付报告。
+
+规则：
+- 用 Markdown 格式输出，标题清晰，结构合理
+- 保留所有关键信息：数据、图表描述、代码、链接等
+- 按逻辑顺序排列，不是简单拼接
+- 去掉重复内容，让报告读起来像一篇完整文档
+- 如有多个子任务产出同类内容（如图表+分析），将它们组织在一起
+
+用户原始任务：{state['user_input'][:200]}
+
+各子任务执行结果：
+{all_results}
+
+请输出最终报告："""
+
+    try:
+        final_output = get_llm_response(
+            [{"role": "user", "content": aggregate_prompt}],
+            temperature=0.3, max_tokens=2048,
+        )
+        logger.info(f"汇总完成：{len(done_tasks)} 个子任务 → {len(final_output)} 字符")
+    except Exception as e:
+        logger.warning(f"LLM 汇总失败，降级拼接: {str(e)[:80]}")
+        # 后端 降级：按顺序拼接所有子任务结果
+        fallback = [f"## {s.get('description', s['id'])}\n\n{s.get('result', '')}" for s in done_tasks]
+        final_output = "\n\n---\n\n".join(fallback)
 
     return {"final_output": final_output, "current_stage": "done"}
 

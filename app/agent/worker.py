@@ -1,4 +1,5 @@
 # 后端 Worker Agent — 执行子任务（直接模式 1 轮 LLM / 复杂任务 function calling 多轮）
+import os
 import json
 import queue
 import re
@@ -42,8 +43,8 @@ FILE_READING_PROMPT = """你是文档分析专家。
 ROLE_DESCRIPTIONS = {
     "data_cleaner": "清洗和预处理数据，处理缺失值、异常值、格式统一。",
     "analyst": "对数据进行统计分析，计算关键指标，发现趋势和规律。",
-    "visualizer": "生成数据可视化图表。使用 matplotlib 绘图并保存。",
-    "coder": "编写可运行的 Python 代码来完成任务，代码要完整可直接执行。",
+    "visualizer": "生成数据可视化图表。使用 matplotlib 绘图并保存到 'chart.png' 等文件名，在回复中用 ![描述](/generated/文件名.png) 引用图片。",
+    "coder": "编写可运行的 Python 代码来完成任务，代码要完整可直接执行。生成的文件（图表/HTML等）用 /generated/文件名 路径引用。",
     "executor": "在安全沙箱中执行 Python 代码，返回执行结果。",
     "tester": "编写单元测试和集成测试代码，验证功能正确性，输出测试报告。",
     "reviewer": "审查代码质量和安全性，检查命名规范、逻辑漏洞和性能问题。",
@@ -145,6 +146,27 @@ def execute_subtask(subtask: dict) -> str:
     max_rounds = _FC_ROUNDS.get(agent_type, 2)
     intent = subtask.get("_intent", "")
     user_input = subtask["description"]
+    original_input = subtask.get("_original_input", "")  # 后端 原始用户输入（含文件路径等）
+
+    # 后端 从原始输入 + 对话历史提取文件路径，直接读取内容 → 注入 LLM 上下文（不依赖 function calling）
+    uploaded_file_path = _extract_file_path(original_input) or ""
+    if not uploaded_file_path:
+        # 后端 当前消息没路径 → 从对话历史中查找之前上传的文件
+        for h in subtask.get("_history", []):
+            if h.get("role") == "user":
+                found = _extract_file_path(h.get("content", ""))
+                if found:
+                    uploaded_file_path = found
+                    break
+    uploaded_file_content = ""
+    if uploaded_file_path:
+        logger.info(f"📎 检测到上传文件: {uploaded_file_path}")
+        uploaded_file_content = str(mcp_manager.call("read_file", {"file_path": uploaded_file_path}))
+        if "文件不存在" not in uploaded_file_content and "解析失败" not in uploaded_file_content:
+            uploaded_file_content = f"\n\n📄 用户上传文件「{os.path.basename(uploaded_file_path)}」的内容：\n{uploaded_file_content}\n\n请基于以上文件内容完成子任务。"
+        else:
+            logger.warning(f"文件读取失败: {uploaded_file_path} → {uploaded_file_content[:80]}")
+            uploaded_file_content = ""
 
     now = datetime.now()
     date_str = now.strftime("%Y年%m月%d日")
@@ -162,19 +184,21 @@ def execute_subtask(subtask: dict) -> str:
     tools = [t for t in all_tools if t["function"]["name"] in allowed_tools] if allowed_tools else []
 
     # ===== 直接模式：简单单意图任务，预判工具 → 直接调用 → 1 轮 LLM =====
-    direct_result = _try_direct_mode(intent, user_input, agent_type, dep_context, date_str)
+    direct_result = _try_direct_mode(intent, user_input, agent_type, dep_context, date_str, original_input)
     if direct_result is not None:
         return direct_result
 
     # ===== Function Calling 模式：复杂/模糊任务 =====
     context = f"用户总体目标：{intent}\n\n" if intent else ""
+    # 后端 注入已预读的上传文件内容，确保 LLM 无需调用 read_file 也能看到内容
+    file_hint = f"\n\n{uploaded_file_content}" if uploaded_file_content else ""
     system_prompt = WORKER_SYSTEM_PROMPT.format(
         agent_type=agent_type, current_date=date_str, context="",
     )
 
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"{dep_context}{context}请完成子任务：{user_input}"},
+        {"role": "user", "content": f"{dep_context}{context}请完成子任务：{user_input}{file_hint}"},
     ]
 
     tool_results_collected = []
@@ -220,14 +244,15 @@ def execute_subtask(subtask: dict) -> str:
 
 
 def _try_direct_mode(intent: str, user_input: str, agent_type: str,
-                     dep_context: str, date_str: str) -> str | None:
+                     dep_context: str, date_str: str, original_input: str = "") -> str | None:
     """后端 直接模式：预判工具 → 直接调用 → 1 轮 LLM 总结
 
     返回 None 表示不适合直接模式，走 function calling
     """
     # 后端 读文件意图：直接读 → 一次性总结
     if "读取并分析文件" in intent or "读文件" in intent:
-        file_path = _extract_file_path(user_input)
+        # 后端 先从子任务描述提取，失败则从原始用户输入提取
+        file_path = _extract_file_path(user_input) or _extract_file_path(original_input)
         if not file_path:
             return None  # 后端 提取不到路径，走 function calling 让 LLM 找
         logger.info(f"⚡ 直接模式 读文件: {file_path}")

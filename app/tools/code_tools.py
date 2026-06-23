@@ -73,6 +73,10 @@ def execute_python(code: str, timeout: int = None) -> str:
         logger.warning(f"代码被安全拦截: {error_msg[:100]}")
         return f"[安全拦截] {error_msg}"
 
+    # 后端 工作目录：data/generated/（图表等产出物可通过 /generated/ 访问）
+    gen_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data", "generated")
+    os.makedirs(gen_dir, exist_ok=True)
+
     # 写入临时文件
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
         f.write(code)
@@ -84,7 +88,7 @@ def execute_python(code: str, timeout: int = None) -> str:
             ["python", tmp_path],
             capture_output=True, text=True,
             timeout=timeout,
-            cwd=os.path.dirname(__file__),
+            cwd=gen_dir,
         )
         output = result.stdout
         if result.stderr:
