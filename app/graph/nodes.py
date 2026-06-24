@@ -1,4 +1,5 @@
 # 后端 LangGraph 工作流节点 — 精简为 3 核心节点：decompose → execute ⇄ execute → aggregate
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from langgraph.types import interrupt
 from app.core.logger import get_logger
@@ -149,6 +150,10 @@ def node_execute(state: WorkflowState) -> dict:
                 results.append(sub)
 
     result_map = {r["id"]: r for r in results}
+    # 后端 归一化：worker 结果中可能含完整 URL（http://localhost:7860/generated/...），统一转相对路径
+    for r in results:
+        if r.get("result"):
+            r["result"] = re.sub(r'https?://[^\s)!]+?/generated/', '/generated/', r["result"])
     new_subtasks = [result_map.get(s["id"], s) for s in subtasks]
 
     # 后端 步骤3：判断下一步
@@ -224,6 +229,7 @@ def node_aggregate(state: WorkflowState) -> dict:
     # 后端 只有 1 个子任务 → 直接返回，无需 LLM 汇总
     if len(done_tasks) == 1:
         final_output = done_tasks[0].get("result", "") or "任务完成"
+        final_output = re.sub(r'https?://[^\s)!]+?/generated/', '/generated/', final_output)
         return {"final_output": final_output, "current_stage": "done"}
 
     # 后端 多子任务 → 组装所有结果，调 LLM 合成一份完整报告
@@ -242,6 +248,7 @@ def node_aggregate(state: WorkflowState) -> dict:
 - 按逻辑顺序排列，不是简单拼接
 - 去掉重复内容，让报告读起来像一篇完整文档
 - 如有多个子任务产出同类内容（如图表+分析），将它们组织在一起
+- ⚠️ 图片路径只能用相对格式 ![描述](/generated/文件名.png)，禁止使用完整 URL
 
 用户原始任务：{state['user_input'][:200]}
 
@@ -256,11 +263,15 @@ def node_aggregate(state: WorkflowState) -> dict:
             temperature=0.3, max_tokens=2048,
         )
         logger.info(f"汇总完成：{len(done_tasks)} 个子任务 → {len(final_output)} 字符")
+        # 后端 兜底替换：LLM 可能生成完整 URL，统一转为相对路径 /generated/文件名
+        final_output = re.sub(r'https?://[^\s)!]+?/generated/', '/generated/', final_output)
     except Exception as e:
         logger.warning(f"LLM 汇总失败，降级拼接: {str(e)[:80]}")
         # 后端 降级：按顺序拼接所有子任务结果
         fallback = [f"## {s.get('description', s['id'])}\n\n{s.get('result', '')}" for s in done_tasks]
         final_output = "\n\n---\n\n".join(fallback)
+        # 后端 兜底替换：降级拼接也可能含完整 URL
+        final_output = re.sub(r'https?://[^\s)!]+?/generated/', '/generated/', final_output)
 
     return {"final_output": final_output, "current_stage": "done"}
 

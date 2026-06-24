@@ -24,7 +24,16 @@ export default function ImageViewer({ src, alt, onClose }) {
 
   if (!src) return null
 
-  const imgSrc = src.startsWith('/generated/') ? src : `/generated/${src}`
+  const getImageSrc = (raw) => {
+    // 后端 把各种格式的 src 规范为 /generated/文件名
+    const decoded = decodeURIComponent(raw)
+    // 提取纯文件名（去掉所有路径前缀和协议前缀）
+    const match = decoded.match(/[^/\\]+\.(png|jpg|jpeg|gif|svg|webp|bmp)(?:\?.*)?$/i)
+    const filename = match ? match[0] : null
+    if (!filename) return decoded
+    return `/generated/${filename}`
+  }
+  const imgSrc = getImageSrc(src)
 
   return (
     <div

@@ -15,7 +15,10 @@ export default function ChatMessage({ message, onImageClick }) {
   const html = useMemo(() => {
     if (isUser || !message.content) return ''
     try {
-      const raw = marked.parse(message.content, { breaks: true })
+      let content = message.content
+      // 后端 LLM 可能生成完整 URL（如 http://localhost:7860/generated/x.png），统一转为相对路径
+      content = content.replace(/https?:\/\/[^/]+\/generated\//g, '/generated/')
+      const raw = marked.parse(content, { breaks: true })
       return DOMPurify.sanitize(raw, { ADD_ATTR: ['target'] }) || ''
     } catch (e) {
       console.error('Markdown parse error:', e)
