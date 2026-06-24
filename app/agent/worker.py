@@ -329,9 +329,10 @@ def _try_direct_mode(intent: str, user_input: str, agent_type: str,
         return _stream_response(messages)
 
     # 后端 可视化意图：LLM 生成 matplotlib 代码 → 自动执行 → 引用产出文件
-    _vis_keywords = ["画图", "图表", "可视化", "生成图", "绘图", "作图", "柱状图", "折线图", "饼图",
-                     "散点图", "热力图", "plot", "chart", "visualiz", "matplotlib", "图形"]
-    if any(kw in intent for kw in _vis_keywords) or any(kw in user_input for kw in _vis_keywords):
+    # 后端 agent_type=visualizer 直接走可视化模式，另加关键词兜底
+    _vis_keywords = ["画", "图", "可视化", "绘图", "作图", "chart", "plot", "visualiz", "matplotlib",
+                     "柱状", "折线", "饼", "散点", "热力", "直方", "曲线", "图形", "图像"]
+    if agent_type == "visualizer" or any(kw in intent for kw in _vis_keywords) or any(kw in user_input for kw in _vis_keywords):
         logger.info(f"⚡ 直接模式 可视化: {user_input[:60]}")
         code_prompt = VISUALIZATION_PROMPT.format(
             agent_type=agent_type, date_str=date_str, user_input=user_input, dep_context=dep_context,

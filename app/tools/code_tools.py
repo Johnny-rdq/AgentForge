@@ -3,6 +3,7 @@ import ast
 import subprocess
 import tempfile
 import os
+import sys
 from app.core.logger import get_logger
 from app.core.config import settings
 
@@ -85,7 +86,7 @@ def execute_python(code: str, timeout: int = None) -> str:
     try:
         # 子进程隔离执行（独立进程，超时自动杀死）
         result = subprocess.run(
-            ["python", tmp_path],
+            [sys.executable, tmp_path],  # 后端 用当前 Python 解释器，确保包一致
             capture_output=True, text=True,
             timeout=timeout,
             cwd=gen_dir,
