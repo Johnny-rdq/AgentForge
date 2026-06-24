@@ -8,6 +8,7 @@ data/*.db
 data/*.json
 data/benchmarks/
 data/uploads/
+data/generated/
 data/tasks/
 logs/
 test_output.txt

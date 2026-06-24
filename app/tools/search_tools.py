@@ -2,14 +2,29 @@
 import urllib.request
 import urllib.parse
 import json
+import os
 from app.core.logger import get_logger
 from app.core.config import settings
 
 logger = get_logger(__name__)
 
+# 后端 代理配置（国内访问国际服务需要）
+_PROXIES = {}
+if settings.http_proxy:
+    _PROXIES["http"] = settings.http_proxy
+if settings.https_proxy:
+    _PROXIES["https"] = settings.https_proxy
+_proxy_handler = urllib.request.ProxyHandler(_PROXIES) if _PROXIES else None
+_proxy_opener = urllib.request.build_opener(_proxy_handler) if _proxy_handler else None
+
 
 def search_internet(query: str, max_results: int = 5) -> str:
-    """后端 联网搜索 — Tavily 优先，不可用则降级 DDG"""
+    """后端 联网搜索 — Tavily 优先，不可用则降级 DDG，均支持代理"""
+    # 后端 设置代理环境变量（DDGS 库通过环境变量读取代理）
+    if _PROXIES:
+        for proto, proxy_url in _PROXIES.items():
+            os.environ[proto + "_proxy"] = proxy_url
+
     if settings.tavily_api_key:
         try:
             from tavily import TavilyClient
@@ -34,11 +49,15 @@ def search_internet(query: str, max_results: int = 5) -> str:
     try:
         from duckduckgo_search import DDGS
         results = []
-        with DDGS() as ddgs:
+        # 后端 传入 proxies 参数（新版 ddgs 库支持）
+        ddgs_kwargs = {}
+        if _PROXIES:
+            ddgs_kwargs["proxies"] = _PROXIES
+        with DDGS(**ddgs_kwargs) as ddgs:
             for r in ddgs.text(query, max_results=max_results):
                 results.append(r)
         if not results:
-            return f"未找到与「{query}」相关的结果"
+            return f"未找到与「{query}」相关的结果，请检查网络或配置代理（HTTP_PROXY）"
         lines = []
         for i, r in enumerate(results, 1):
             title = r.get("title", "无标题")
@@ -48,14 +67,15 @@ def search_internet(query: str, max_results: int = 5) -> str:
         return "\n".join(lines)
     except Exception as e:
         logger.error(f"搜索失败: {str(e)[:100]}")
-        return f"搜索失败: {str(e)[:200]}"
+        return f"搜索失败: {str(e)[:200]}。中国大陆可能无法访问 DuckDuckGo，请在 .env 中配置 HTTP_PROXY 代理。"
 
 
 def fetch_weather(city: str) -> str:
-    """后端 查询城市实时天气（wttr.in 免费 API）"""
+    """后端 查询城市实时天气（wttr.in 免费 API，支持代理）"""
     try:
         url = f"https://wttr.in/{urllib.parse.quote(city)}?format=j1&lang=zh"
-        with urllib.request.urlopen(url, timeout=10) as resp:
+        opener = _proxy_opener or urllib.request.build_opener()
+        with opener.open(url, timeout=10) as resp:
             data = json.loads(resp.read())
         current = data.get("current_condition", [{}])[0]
         return (
@@ -67,7 +87,7 @@ def fetch_weather(city: str) -> str:
         )
     except Exception as e:
         logger.warning(f"天气查询失败: {city} - {e}")
-        return f"天气查询失败: {str(e)}"
+        return f"天气查询失败: {str(e)[:200]}"
 
 
 SEARCH_TOOL_SCHEMAS = {

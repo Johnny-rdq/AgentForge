@@ -523,9 +523,16 @@ def _bg_persist(elapsed_s: float, task_id: str, thread_id: str, task_input: str,
 
 
 def _save_conversation(thread_id: str, task_input: str, final_output: str):
-    """后端 保存对话到内存（最近 10 轮）"""
+    """后端 保存对话到内存（最近 10 轮）+ 向量记忆"""
     hist = _conversation_history.setdefault(thread_id, [])
     hist.append({"role": "user", "content": task_input})
     hist.append({"role": "assistant", "content": final_output[:500]})
     if len(hist) > 20:
         hist[:] = hist[-20:]
+    # 后端 存入 ChromaDB 向量记忆，Master 后续拆解时可搜到相似历史任务
+    try:
+        from app.memory.vector_store import vector_memory
+        memory_content = f"用户: {task_input[:200]}\n结果: {final_output[:200]}"
+        vector_memory.store(thread_id, memory_content)
+    except Exception:
+        pass  # 后端 记忆存储失败不影响主流程

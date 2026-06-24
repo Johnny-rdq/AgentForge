@@ -282,6 +282,27 @@ def _extract_code_block(text: str) -> str:
     return ""
 
 
+def _extract_city(text: str) -> str:
+    """后端 从用户输入中提取城市名（查天气用）"""
+    import re
+    # 后端 常见城市名模式
+    cities = ["北京", "上海", "广州", "深圳", "杭州", "成都", "重庆", "武汉", "南京", "西安",
+              "天津", "苏州", "长沙", "郑州", "东莞", "青岛", "沈阳", "宁波", "昆明", "大连",
+              "厦门", "合肥", "佛山", "福州", "哈尔滨", "济南", "温州", "长春", "石家庄",
+              "常州", "泉州", "南宁", "贵阳", "南昌", "太原", "烟台", "嘉兴", "南通", "金华",
+              "珠海", "惠州", "徐州", "海口", "乌鲁木齐", "兰州", "呼和浩特", "银川", "三亚",
+              "Tokyo", "London", "New York", "Paris", "Berlin", "Sydney", "Beijing", "Shanghai",
+              "Shenzhen", "Guangzhou", "Hangzhou", "Chengdu", "Seoul", "Singapore", "Bangkok"]
+    for city in cities:
+        if city in text:
+            return city
+    # 后端 匹配 "XX天气" / "XX的天气" 模式
+    m = re.search(r'(\S{2,4})(?:的)?天气', text)
+    if m:
+        return m.group(1)
+    return ""
+
+
 def _try_direct_mode(intent: str, user_input: str, agent_type: str,
                      dep_context: str, date_str: str, original_input: str = "") -> str | None:
     """后端 直接模式：预判工具 → 直接调用 → 1 轮 LLM 总结
@@ -303,10 +324,27 @@ def _try_direct_mode(intent: str, user_input: str, agent_type: str,
         ]
         return _stream_response(messages)
 
-    # 后端 搜索意图：直接搜 → 一次性总结
-    if "搜索" in intent:
-        logger.info(f"⚡ 直接模式 搜索: {user_input[:40]}")
-        search_result = mcp_manager.call("search_internet", {"query": user_input})
+    # 后端 天气意图：直接查天气 → 一次性总结
+    if "天气" in intent or "天气" in user_input or "weather" in intent.lower() or "weather" in user_input.lower():
+        # 后端 从用户输入中提取城市名
+        city = _extract_city(user_input)
+        if city:
+            logger.info(f"⚡ 直接模式 天气: {city}")
+            weather_result = mcp_manager.call("fetch_weather", {"city": city})
+            system_prompt = WORKER_SYSTEM_PROMPT.format(
+                agent_type=agent_type, current_date=date_str, context="你正在报告天气信息。",
+            )
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"{dep_context}请根据以下天气数据给出简洁报告。\n\n用户问题：{user_input}\n\n天气数据：\n{weather_result}"},
+            ]
+            return _stream_response(messages)
+
+    # 后端 搜索/调研意图：直接搜 → 一次性总结
+    _search_kw = ["搜索", "调研", "查找", "查询", "查", "搜", "research", "search", "最新", "趋势", "新闻"]
+    if any(kw in intent for kw in _search_kw) or any(kw in user_input for kw in _search_kw):
+        logger.info(f"⚡ 直接模式 搜索: {user_input[:60]}")
+        search_result = mcp_manager.call("search_internet", {"query": user_input[:200]})
         system_prompt = WORKER_SYSTEM_PROMPT.format(
             agent_type=agent_type, current_date=date_str, context="你正在整理搜索结果。",
         )

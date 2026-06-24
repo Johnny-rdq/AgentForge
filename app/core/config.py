@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     hitl_enabled: bool = True
     workflow_timeout: int = 300  # 后端 整体工作流超时秒数，防止卡死
 
+    # ========== 网络 ==========
+    http_proxy: str = ""  # 后端 HTTP 代理，国内访问国际服务需要
+    https_proxy: str = ""  # 后端 HTTPS 代理
+
     # ========== 搜索 ==========
     tavily_api_key: str = ""
 
