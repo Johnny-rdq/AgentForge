@@ -66,7 +66,8 @@ decompose → [human_review] → execute ⇄ execute → [reflect] → aggregate
 - 📡 **Token 级流式** — Worker 线程逐 token 推送 SSE，哨兵机制即时结束
 - 🔧 **MCP 协议工具** — 7 个标准化工具（搜索/文件/代码/天气），Agent 白名单隔离
 - 🛡️ **安全沙箱** — Python 代码 AST 扫描拦截 + 子进程隔离执行
-- 📎 **文件分析** — 上传 PDF/Word/TXT/MD，自动预读内容注入 LLM，图表生成自动挂载
+- 📎 **文件分析** — 上传 PDF/Word/TXT/MD，自动预读内容注入 LLM，图表生成自动挂载，点击放大查看
+- 🖼️ **图片灯箱** — 对话中的图表/图片点击放大，支持缩放和下载，ESC 一键关闭
 - 🔍 **Reflector** — 独立图节点，执行后自动审查+修正，不合格自动重试（最多 1 轮）
 - 🎛️ **HITL 人工审批** — 侧边栏一键开关，拆解方案暂停确认后才执行
 - 📊 **自动化评测** — 50 题标准基准测试，前端一键触发，实时进度，自动生成通过率/耗时/质量报告
@@ -172,6 +173,18 @@ AgentForge/
 │   │   └── benchmark.py     # 评测执行引擎
 │   └── models/schemas.py    # Pydantic 数据模型
 ├── frontend/                # React + TailwindCSS SPA
+│   ├── src/components/
+│   │   ├── ChatArea.jsx     # 消息列表 + 欢迎引导
+│   │   ├── ChatMessage.jsx  # 单条消息（Markdown 渲染 + 图片点击）
+│   │   ├── ImageViewer.jsx  # 图片灯箱（放大/缩小/下载）
+│   │   ├── MessageInput.jsx # 输入框（文件上传 + 发送/停止）
+│   │   ├── Sidebar.jsx      # 会话侧边栏
+│   │   ├── WorkflowPanel.jsx# 执行过程可视化面板
+│   │   └── ErrorBoundary.jsx# React 错误边界
+│   ├── src/hooks/
+│   │   ├── useChat.js       # SSE 流式对话 Hook
+│   │   └── useSessions.js   # 会话管理 Hook
+│   └── dist/                # 构建产物（Vite）
 ├── data/
 │   ├── uploads/             # 用户上传文件
 │   ├── generated/           # 图表等生成文件（挂载 /generated）

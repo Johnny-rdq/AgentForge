@@ -3,7 +3,7 @@ import { Sparkles } from 'lucide-react'
 import ChatMessage from './ChatMessage'
 import WorkflowPanel from './WorkflowPanel'
 
-export default function ChatArea({ messages, workflowState, workflowSessionId, activeId, isStreaming, onApprove }) {
+export default function ChatArea({ messages, workflowState, workflowSessionId, activeId, isStreaming, onApprove, onImageClick }) {
   const bottomRef = useRef(null)
 
   useEffect(() => {
@@ -43,7 +43,7 @@ export default function ChatArea({ messages, workflowState, workflowSessionId, a
       ) : (
         <div className="pb-4">
           {messages.map(msg => (
-            <ChatMessage key={msg.id} message={msg} />
+            <ChatMessage key={msg.id} message={msg} onImageClick={onImageClick} />
           ))}
           {workflowState && workflowSessionId === activeId && <WorkflowPanel workflowState={workflowState} onApprove={onApprove} />}
           <div ref={bottomRef} />

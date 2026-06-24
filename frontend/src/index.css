@@ -25,6 +25,8 @@
 .markdown-body a { color: #a78bfa; text-decoration: none; }
 .markdown-body a:hover { text-decoration: underline; }
 .markdown-body hr { border: none; border-top: 1px solid #27272a; margin: 0.75rem 0; }
+.markdown-body img { max-width: 100%; height: auto; border-radius: 0.5rem; margin: 0.5rem 0; border: 1px solid #27272a; cursor: pointer; transition: opacity 0.15s; }
+.markdown-body img:hover { opacity: 0.85; }
 
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(8px); }

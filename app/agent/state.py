@@ -27,9 +27,10 @@ class WorkflowState(TypedDict):
     error_count: int
     final_output: Optional[str]
     conversation_history: list[dict]  # 后端 最近几轮对话，每轮 {"role": ..., "content": ...}
+    thread_id: str  # 后端 会话 ID，用于向量记忆隔离
 
 
-def create_initial_state(user_input: str, conversation_history: list[dict] = None) -> WorkflowState:
+def create_initial_state(user_input: str, conversation_history: list[dict] = None, thread_id: str = "") -> WorkflowState:
     """后端 创建工作流初始状态"""
     return WorkflowState(
         task_id=str(uuid.uuid4()),
@@ -40,4 +41,5 @@ def create_initial_state(user_input: str, conversation_history: list[dict] = Non
         error_count=0,
         final_output=None,
         conversation_history=conversation_history or [],
+        thread_id=thread_id,
     )

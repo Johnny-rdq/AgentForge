@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import useChat from './hooks/useChat'
 import useSessions from './hooks/useSessions'
@@ -6,9 +6,10 @@ import Sidebar from './components/Sidebar'
 import ChatArea from './components/ChatArea'
 import MessageInput from './components/MessageInput'
 import ErrorBoundary from './components/ErrorBoundary'
+import ImageViewer from './components/ImageViewer'
 import BenchmarkPage from './pages/BenchmarkPage'
 
-function ChatView({ activeId, sidebarOpen, setSidebarOpen, sessions, handleSelectSession, handleSend, handleCreate, deleteSession, messages, isStreaming, workflowState, workflowSessionId, stopStreaming, handleApprove }) {
+function ChatView({ activeId, sidebarOpen, setSidebarOpen, sessions, handleSelectSession, handleSend, handleCreate, deleteSession, messages, isStreaming, workflowState, workflowSessionId, stopStreaming, handleApprove, onImageClick }) {
   return (
     <div className="flex h-screen overflow-hidden">
       {sidebarOpen && (
@@ -37,6 +38,7 @@ function ChatView({ activeId, sidebarOpen, setSidebarOpen, sessions, handleSelec
           activeId={activeId}
           isStreaming={isStreaming}
           onApprove={handleApprove}
+          onImageClick={onImageClick}
         />
         <MessageInput
           onSend={handleSend}
@@ -50,8 +52,17 @@ function ChatView({ activeId, sidebarOpen, setSidebarOpen, sessions, handleSelec
 
 export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [viewedImage, setViewedImage] = useState(null)
   const { sessions, activeId, setActiveId, createSession, deleteSession, updateSessionTitle } = useSessions()
   const { messages, isStreaming, workflowState, workflowSessionId, sendMessage, stopStreaming, loadHistory, approveTask } = useChat(activeId)
+
+  const handleImageClick = useCallback((src, alt) => {
+    setViewedImage({ src, alt: alt || '' })
+  }, [])
+
+  const handleCloseImage = useCallback(() => {
+    setViewedImage(null)
+  }, [])
 
   useEffect(() => {
     if (activeId) loadHistory(activeId)
@@ -92,10 +103,18 @@ export default function App() {
               isStreaming={isStreaming} workflowState={workflowState}
               workflowSessionId={workflowSessionId}
               stopStreaming={stopStreaming} handleApprove={handleApprove}
+              onImageClick={handleImageClick}
             />
           </ErrorBoundary>
         } />
       </Routes>
+      {viewedImage && (
+        <ImageViewer
+          src={viewedImage.src}
+          alt={viewedImage.alt}
+          onClose={handleCloseImage}
+        />
+      )}
     </BrowserRouter>
   )
 }

@@ -105,7 +105,7 @@ async def _execute_and_stream(task_input: str, thread_id: str = "default_session
     sql_memory.update_title(thread_id, task_input)
 
     history = _conversation_history.get(thread_id, [])
-    state = create_initial_state(task_input, conversation_history=history)
+    state = create_initial_state(task_input, conversation_history=history, thread_id=thread_id)
     task_id = state["task_id"]
 
     # ===== Graph 路径：全部任务走 Master LLM 拆解 → LangGraph 执行 =====
@@ -169,28 +169,66 @@ async def _execute_and_stream(task_input: str, thread_id: str = "default_session
                 except queue.Empty:
                     break
 
-            # 后端 步骤2：哨兵已到 → 快速收尾，不等 graph 后续节点
+            # 后端 步骤2：哨兵已到 → 检查是否所有子任务已完成
             if streaming_complete and not done_sent:
-                done_sent = True
-                # 后端 等 graph 线程把 execute 节点的 step 发过来（最长 5 秒）
-                deadline = time.time() + 5.0
+                # 后端 等 graph 线程把后续 step 发过来（最长 120 秒，给 LLM 代码生成+执行+描述留足时间）
+                deadline = time.time() + 120.0
+                graph_finished = False
                 while time.time() < deadline:
                     try:
-                        msg_type, payload = await asyncio.wait_for(step_queue.get(), timeout=0.5)
+                        msg_type, payload = await asyncio.wait_for(step_queue.get(), timeout=1.0)
                         if msg_type == "step":
+                            _worker_result_state = payload
+                            # 后端 把等到的 step 事件也推送给前端（处理节点状态变更）
+                            for node_name, node_state in payload.items():
+                                for evt in _process_step(node_name, node_state, task_id):
+                                    yield evt
+                            # 后端 检查是否所有子任务都已完成
+                            all_done = True
                             for ns in payload.values():
-                                for s in ns.get("subtasks", []):
-                                    if s.get("result") and s["status"] in ("done", "failed", "executed"):
-                                        _worker_result_state = payload
-                                        break
-                            if _worker_result_state is not None:
-                                break  # 后端 拿到 Worker 结果了，退出等待
+                                if isinstance(ns, dict):
+                                    for s in ns.get("subtasks", []):
+                                        if s["status"] in ("pending", "running"):
+                                            all_done = False
+                                            break
+                            if all_done:
+                                break  # 后端 全部完成 → 退出等待
                         elif msg_type == "graph_done":
+                            graph_finished = True
                             break
                     except asyncio.TimeoutError:
                         continue
 
+                # 后端 graph_done 到达 → 走正常收尾流程
+                if graph_finished:
+                    done_sent = False
+                    streaming_complete = False
+                    # 后端 把 graph_done 事件放回队列让外层循环处理
+                    try:
+                        step_queue.put_nowait(("graph_done", None))
+                    except Exception:
+                        pass
+                    continue
+
                 fout, slist = _extract_output(_worker_result_state) if _worker_result_state else ("", [])
+                # 后端 再次确认：所有子任务是否真的完成了
+                still_pending = [s["id"] for s in slist if s["status"] in ("pending", "running")]
+                if still_pending:
+                    logger.info(f"哨兵等待超时但仍有 {len(still_pending)} 个子任务未完成: {still_pending}，重置后继续等待（防止旧版超时检测误触发）")
+                    done_sent = False
+                    streaming_complete = False
+                    # 后端 旧版超时检测已加子任务完成守卫（still_running 检查），无需重置 has_streamed
+                    continue
+
+                # 后端 多子任务时不提前退出，等 graph_done → aggregate 汇总所有结果（含图片引用）
+                if len(slist) > 1:
+                    logger.info(f"哨兵检测到 {len(slist)} 个子任务全部完成，等待 graph_done 走 aggregate 汇总")
+                    done_sent = False
+                    streaming_complete = False
+                    # 后端 清空缓存状态，防止旧版超时检测取到旧状态误判退出
+                    _worker_result_state = None
+                    continue
+
                 elapsed = time.time() - start_time
                 logger.info(f"⚡ 哨兵提前结束: {task_id}, 耗时 {elapsed:.1f}s")
                 if fout:
@@ -207,10 +245,12 @@ async def _execute_and_stream(task_input: str, thread_id: str = "default_session
             try:
                 msg_type, payload = await asyncio.wait_for(step_queue.get(), timeout=0.03 if token_drained else 0.15)
             except asyncio.TimeoutError:
-                # 后端 旧版兼容：token 已全部输出 + 有 Worker 结果 → 提前结束
+                # 后端 旧版兼容：token 已全部输出 + 有 Worker 结果 → 仅在全部子任务完成时才提前结束
                 if has_streamed and not done_sent and _worker_result_state is not None:
                     fout, slist = _extract_output(_worker_result_state)
-                    if fout:
+                    # 后端 关键守卫：必须所有子任务都已完成（done/failed/executed），防止半路截断
+                    still_running = [s["id"] for s in slist if s["status"] in ("pending", "running")]
+                    if fout and not still_running:
                         done_sent = True
                         elapsed = time.time() - start_time
                         logger.info(f"⚡ 提前结束(超时检测): {task_id}, 耗时 {elapsed:.1f}s")
@@ -533,6 +573,6 @@ def _save_conversation(thread_id: str, task_input: str, final_output: str):
     try:
         from app.memory.vector_store import vector_memory
         memory_content = f"用户: {task_input[:200]}\n结果: {final_output[:200]}"
-        vector_memory.store(thread_id, memory_content)
+        vector_memory.store(f"{thread_id}_{int(time.time() * 1000)}", memory_content, {"thread_id": thread_id})
     except Exception:
         pass  # 后端 记忆存储失败不影响主流程

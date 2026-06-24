@@ -16,7 +16,7 @@ def node_decompose(state: WorkflowState) -> dict:
     """后端 节点1：Master 拆解任务 → 子任务列表"""
     logger.info(f"拆解任务: {state['user_input'][:50]}...")
 
-    subtasks_raw = decompose_task(state["user_input"], state.get("conversation_history", []))
+    subtasks_raw = decompose_task(state["user_input"], state.get("conversation_history", []), state.get("thread_id", ""))
     subtasks = [SubtaskDef(
         id=raw["id"], description=raw["description"],
         agent_type=raw["agent_type"], depends_on=raw.get("depends_on", []),
@@ -186,6 +186,14 @@ def node_reflect(state: WorkflowState) -> dict:
     for s in subtasks:
         s = dict(s)
         if s["status"] == "executed":
+            # 后端 可视化/图表结果跳过反思：Reflector LLM 看不到图片，修正反而会丢弃 markdown 图片引用
+            result_text = s.get("result", "") or ""
+            if "](/generated/" in result_text or "](data:image/" in result_text:
+                logger.info(f"Reflector 跳过 {s['id']}（含图片引用，无需文本审查）")
+                s["status"] = "done"
+                reflected_count += 1
+                new_subtasks.append(s)
+                continue
             try:
                 reviewed_result, fix_attempts = reflect_and_fix(
                     {"result": s.get("result", ""), "description": s.get("description", "")},

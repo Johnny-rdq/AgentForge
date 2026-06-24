@@ -35,18 +35,20 @@ MASTER_SYSTEM_PROMPT = """你是任务拆解专家。先理解用户意图，再
 - description 里带上 keywords 中的关键词，确保 Worker 搜索准确
 - 单一意图（搜新闻/查天气/写代码/翻译/读文件）→ 只拆 1 个
 - 复合意图（搜+分析+画图）→ 最多拆 3 个
+- visualizer 已内置代码生成+执行，不要额外拆出 coder/executor 子任务
 - 禁止编造 Agent 类型"""
 
 
-def decompose_task(user_input: str, conversation_history: list[dict] = None) -> list[dict]:
+def decompose_task(user_input: str, conversation_history: list[dict] = None, thread_id: str = "") -> list[dict]:
     """后端 Master 核心：将用户任务拆解为子任务列表"""
 
     agent_types = get_available_agent_types()
 
-    # 后端 向量记忆增强：搜索 3 个最相似历史任务作为参考
+    # 后端 向量记忆增强：搜索当前会话内 3 个最相似历史任务作为参考
     memory_context = ""
     try:
-        similar_tasks = vector_memory.search(user_input, k=3)
+        # 后端 仅搜索当前 thread_id 的记忆，避免跨会话内容泄露
+        similar_tasks = vector_memory.search(user_input, k=3, thread_id=thread_id) if thread_id else []
         if similar_tasks and any(similar_tasks):
             memory_context = "历史相似任务经验（参考其拆解策略，但根据当前任务调整）：\n"
             for i, mem in enumerate(similar_tasks, 1):

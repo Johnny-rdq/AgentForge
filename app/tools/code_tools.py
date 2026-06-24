@@ -88,6 +88,7 @@ def execute_python(code: str, timeout: int = None) -> str:
         result = subprocess.run(
             [sys.executable, tmp_path],  # 后端 用当前 Python 解释器，确保包一致
             capture_output=True, text=True,
+            encoding="utf-8", errors="replace",  # 后端 强制 UTF-8，避免 Windows GBK 乱码
             timeout=timeout,
             cwd=gen_dir,
         )

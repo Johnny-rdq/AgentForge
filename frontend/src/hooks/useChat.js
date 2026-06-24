@@ -222,34 +222,33 @@ function handleSSEEvent(event, data, msgId, threadId, setAllMessages, setWorkflo
     switch (event) {
       case 'thinking':
         setWorkflowState({
-          stage: parsed.stage || 'execute',
-          message: parsed.message || '',
-          runningIds: parsed.running_ids || [],
+          stage: parsed?.stage || 'execute',
+          message: parsed?.message || '',
+          runningIds: parsed?.running_ids || [],
         })
         break
 
       case 'subtask_update':
         setWorkflowState({
           stage: 'decompose',
-          message: `拆解为 ${parsed.subtasks?.length || 0} 个子任务`,
-          subtasks: parsed.subtasks || [],
+          message: `拆解为 ${parsed?.subtasks?.length || 0} 个子任务`,
+          subtasks: parsed?.subtasks || [],
         })
         break
 
       case 'token':
-        // 核心修复：一旦开始流式吐字，立刻隐藏“执行子任务”等思考面板！
         setWorkflowState(null)
-
+        const tokenText = parsed == null ? '' : (typeof parsed === 'string' ? parsed : (parsed.data || ''))
         setAllMessages(prev => ({
           ...prev,
           [threadId]: prev[threadId].map(m =>
-            m.id === msgId ? { ...m, content: m.content + (typeof parsed === 'string' ? parsed : (parsed.data || '')) } : m
+            m.id === msgId ? { ...m, content: m.content + tokenText } : m
           )
         }))
         break
 
       case 'result':
-        if (parsed.output) {
+        if (parsed?.output) {
           setAllMessages(prev => ({
             ...prev,
             [threadId]: prev[threadId].map(m =>
@@ -264,15 +263,15 @@ function handleSSEEvent(event, data, msgId, threadId, setAllMessages, setWorkflo
         needsApprovalRef.current = true
         setWorkflowState({
           stage: 'review',
-          message: parsed.message || '请审批子任务方案',
-          taskId: parsed.task_id,
-          plan: parsed.plan || [],
+          message: parsed?.message || '请审批子任务方案',
+          taskId: parsed?.task_id,
+          plan: parsed?.plan || [],
           needsApproval: true,
         })
         break
 
       case 'done':
-        if (parsed.elapsed) {
+        if (parsed?.elapsed) {
           setAllMessages(prev => ({
             ...prev,
             [threadId]: prev[threadId].map(m =>
@@ -295,7 +294,7 @@ function handleSSEEvent(event, data, msgId, threadId, setAllMessages, setWorkflo
         setAllMessages(prev => ({
           ...prev,
           [threadId]: prev[threadId].map(m =>
-            m.id === msgId ? { ...m, content: `❌ ${parsed.message || '执行失败'}`, isStreaming: false } : m
+            m.id === msgId ? { ...m, content: `❌ ${parsed?.message || '执行失败'}`, isStreaming: false } : m
           )
         }))
         setWorkflowState(null)

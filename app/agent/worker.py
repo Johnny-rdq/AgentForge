@@ -45,19 +45,31 @@ VISUALIZATION_PROMPT = """你是 {agent_type} 专家。
 
 当前日期：{date_str}
 
-你必须生成一段完整可执行的 Python 代码来创建图表。规则：
-- 使用 matplotlib，设置中文字体（SimHei 或 sans-serif fallback）
-- 开头加上：import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
-- 使用 plt.savefig('chart.png', dpi=150, bbox_inches='tight') 保存图表
-- 也可以保存为其他文件名如 chart_*.png
-- 代码要完整、可直接运行，不要省略 import
-- 只输出代码块，不要多余解释
-- 用 ```python ... ``` 包裹代码"""
+你必须生成一段完整可执行的 Python 代码来创建图表。严格按以下规则：
+
+1. 开头必须写：
+   import matplotlib; matplotlib.use('Agg')
+   import matplotlib.pyplot as plt
+   import numpy as np
+
+2. 中文字体设置（必须）：
+   plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS', 'sans-serif']
+   plt.rcParams['axes.unicode_minus'] = False
+
+3. 保存图表用 plt.savefig，文件名用英文（如 chart.png / chart_pie.png / chart_bar.png），dpi=150, bbox_inches='tight'
+
+4. 保存后用 print("CHART_SAVED: 文件名.png") 输出文件名，方便后续引用
+
+5. 禁止 import os / subprocess / sys / shutil（会被安全拦截）
+
+6. 代码要完整可直接运行，不要省略 import
+
+7. 用 ```python ... ``` 包裹代码，只输出代码块，不要多余解释"""
 
 ROLE_DESCRIPTIONS = {
     "data_cleaner": "清洗和预处理数据，处理缺失值、异常值、格式统一。",
     "analyst": "对数据进行统计分析，计算关键指标，发现趋势和规律。",
-    "visualizer": "生成数据可视化图表。使用 matplotlib 绘图并保存到 'chart.png' 等文件名，在回复中用 ![描述](/generated/文件名.png) 引用图片。",
+    "visualizer": "一站式生成数据可视化图表（自动写代码+执行+保存图片）。直接描述想要的图表即可，无需额外拆分编写/执行步骤。在回复中用 ![描述](/generated/文件名.png) 引用图片。",
     "coder": "编写可运行的 Python 代码来完成任务，代码要完整可直接执行。生成的文件（图表/HTML等）用 /generated/文件名 路径引用。",
     "executor": "在安全沙箱中执行 Python 代码，返回执行结果。",
     "tester": "编写单元测试和集成测试代码，验证功能正确性，输出测试报告。",
@@ -340,9 +352,107 @@ def _try_direct_mode(intent: str, user_input: str, agent_type: str,
             ]
             return _stream_response(messages)
 
+    # 后端 可视化意图：LLM 生成 matplotlib 代码 → 自动执行 → 扫描产出文件 → 引用图片
+    # 后端 必须排在搜索前面！避免"根据搜索到的数据画饼图"被搜索模式抢先命中
+    # 后端 agent_type=visualizer 直接走可视化模式，另加关键词兜底
+    _vis_keywords = ["画", "图", "可视化", "绘图", "作图", "chart", "plot", "visualiz", "matplotlib",
+                     "柱状", "折线", "饼", "散点", "热力", "直方", "曲线", "图形", "图像"]
+    if agent_type == "visualizer" or any(kw in intent for kw in _vis_keywords) or any(kw in user_input for kw in _vis_keywords):
+        logger.info(f"⚡ 直接模式 可视化: {user_input[:60]}")
+        code_prompt = VISUALIZATION_PROMPT.format(
+            agent_type=agent_type, date_str=date_str,
+        )
+        code_messages = [
+            {"role": "system", "content": code_prompt},
+            {"role": "user", "content": f"{dep_context}请根据以下需求生成 Python 绘图代码。\n\n用户需求：{user_input}"},
+        ]
+        # 后端 步骤1：LLM 生成代码（非流式，需要完整代码才能执行）
+        code_text = _get_llm_response_sync(code_messages)
+        logger.info(f"可视化代码生成: 收到 {len(code_text or '')} 字符, 含```python: {'```python' in (code_text or '')}")
+        if not code_text:
+            logger.warning(f"可视化代码生成为空！降级重试一次")
+            # 后端 重试：换个说法再问一次
+            code_messages_retry = [
+                {"role": "system", "content": code_prompt},
+                {"role": "user", "content": f"我需要一段完整的 Python 绘图代码。请直接输出 ```python ... ``` 代码块。\n\n需求：{user_input}"},
+            ]
+            code_text = _get_llm_response_sync(code_messages_retry)
+            logger.info(f"可视化代码重试: 收到 {len(code_text or '')} 字符")
+
+        code_block = _extract_code_block(code_text)
+        # 后端 兜底：如果没有 ```python 标记但内容看起来像代码，直接用全文
+        if not code_block and code_text and ("import matplotlib" in code_text or "plt." in code_text or "savefig" in code_text):
+            code_block = code_text.strip()
+            logger.info("可视化代码提取兜底：未检测到 ```python 标记，使用全文作为代码")
+
+        if code_block:
+            # 后端 步骤2：执行代码（首次尝试）
+            exec_result = mcp_manager.call("execute_python", {"code": code_block})
+            logger.info(f"可视化代码执行完成: {exec_result[:120]}")
+
+            # 后端 步骤3：执行失败 → LLM 修复重试一次
+            if "返回码]: 1" in exec_result or "[返回码]: 1" in exec_result or "安全拦截" in exec_result or "Traceback" in exec_result:
+                logger.warning(f"可视化代码首次执行失败，尝试让 LLM 修复: {exec_result[:150]}")
+                fix_messages = [
+                    {"role": "system", "content": "你是 Python 专家。以下绘图代码执行失败，请修复后只输出完整代码（用 ```python 包裹）。禁止 import os/subprocess/sys/shutil。"},
+                    {"role": "user", "content": f"原代码：\n```python\n{code_block}\n```\n\n错误输出：\n{exec_result}\n\n请输出修复后的完整代码。"},
+                ]
+                fixed_text = _get_llm_response_sync(fix_messages)
+                fixed_code = _extract_code_block(fixed_text)
+                if not fixed_code and fixed_text:
+                    fixed_code = fixed_text.strip()
+                if fixed_code and fixed_code != code_block:
+                    exec_result = mcp_manager.call("execute_python", {"code": fixed_code})
+                    logger.info(f"可视化代码修复后执行: {exec_result[:120]}")
+
+            # 后端 步骤4：扫描 data/generated/ 目录，找出本次生成的图片文件
+            gen_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data", "generated")
+            image_files = []
+            if os.path.isdir(gen_dir):
+                for f in os.listdir(gen_dir):
+                    if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.html')):
+                        fpath = os.path.join(gen_dir, f)
+                        try:
+                            image_files.append((f, os.path.getmtime(fpath)))
+                        except OSError:
+                            image_files.append((f, 0))
+                image_files.sort(key=lambda x: x[1], reverse=True)  # 后端 最新文件排前面
+                image_files = [f[0] for f in image_files[:8]]  # 后端 最多取 8 个
+
+            # 后端 步骤5：构建文件引用列表，告诉 LLM 实际生成了哪些文件
+            if image_files:
+                file_list = "\n".join(f"  - /generated/{f}" for f in image_files)
+                file_hint = f"以下是你生成的实际文件（请用这些确切的文件名在回复中引用）：\n{file_list}"
+            else:
+                file_hint = "（未检测到新生成的图片文件，请根据代码执行输出判断）"
+
+            desc_prompt = WORKER_SYSTEM_PROMPT.format(
+                agent_type=agent_type, current_date=date_str,
+                context="你已成功生成图表。请在回复中用 ![描述](/generated/文件名.png) 引用实际生成的图片文件。",
+            )
+            desc_messages = [
+                {"role": "system", "content": desc_prompt},
+                {"role": "user", "content": f"用户需求：{user_input}\n\n代码执行输出：\n{exec_result}\n\n{file_hint}\n\n请用 Markdown 描述图表内容，并用 ![描述](/generated/实际文件名.png) 嵌入图片。"},
+            ]
+            return _stream_response(desc_messages)
+
+        # 后端 代码生成完全失败 → 降级为普通文本回复
+        logger.warning(f"可视化代码生成为空，降级为文本回复")
+        desc_prompt = WORKER_SYSTEM_PROMPT.format(
+            agent_type=agent_type, current_date=date_str, context="请直接输出结果。",
+        )
+        return _stream_response([
+            {"role": "system", "content": desc_prompt},
+            {"role": "user", "content": f"{dep_context}{user_input}"},
+        ])
+
     # 后端 搜索/调研意图：直接搜 → 一次性总结
+    # 后端 注意：排在可视化之后，且排除含可视化关键词的描述（如"根据搜索到的数据画饼图"）
     _search_kw = ["搜索", "调研", "查找", "查询", "查", "搜", "research", "search", "最新", "趋势", "新闻"]
-    if any(kw in intent for kw in _search_kw) or any(kw in user_input for kw in _search_kw):
+    _vis_kw_set = {"画", "图", "可视化", "绘图", "作图", "chart", "plot", "visualiz", "matplotlib",
+                   "柱状", "折线", "饼", "散点", "热力", "直方", "曲线", "图形", "图像"}
+    _has_vis = any(kw in intent for kw in _vis_kw_set) or any(kw in user_input for kw in _vis_kw_set)
+    if not _has_vis and (any(kw in intent for kw in _search_kw) or any(kw in user_input for kw in _search_kw)):
         logger.info(f"⚡ 直接模式 搜索: {user_input[:60]}")
         search_result = mcp_manager.call("search_internet", {"query": user_input[:200]})
         system_prompt = WORKER_SYSTEM_PROMPT.format(
@@ -365,44 +475,6 @@ def _try_direct_mode(intent: str, user_input: str, agent_type: str,
             {"role": "user", "content": f"{dep_context}请翻译以下内容：\n\n{user_input}"},
         ]
         return _stream_response(messages)
-
-    # 后端 可视化意图：LLM 生成 matplotlib 代码 → 自动执行 → 引用产出文件
-    # 后端 agent_type=visualizer 直接走可视化模式，另加关键词兜底
-    _vis_keywords = ["画", "图", "可视化", "绘图", "作图", "chart", "plot", "visualiz", "matplotlib",
-                     "柱状", "折线", "饼", "散点", "热力", "直方", "曲线", "图形", "图像"]
-    if agent_type == "visualizer" or any(kw in intent for kw in _vis_keywords) or any(kw in user_input for kw in _vis_keywords):
-        logger.info(f"⚡ 直接模式 可视化: {user_input[:60]}")
-        code_prompt = VISUALIZATION_PROMPT.format(
-            agent_type=agent_type, date_str=date_str, user_input=user_input, dep_context=dep_context,
-        )
-        code_messages = [
-            {"role": "system", "content": code_prompt},
-            {"role": "user", "content": f"请根据以下需求生成并执行 Python 绘图代码。\n\n用户需求：{user_input}"},
-        ]
-        # 后端 用非流式获取代码（需要完整代码才能执行）
-        code_text = _get_llm_response_sync(code_messages)
-        if code_text and "```python" in code_text:
-            # 后端 提取代码块 → 执行 → 让 LLM 描述结果
-            code_block = _extract_code_block(code_text)
-            if code_block:
-                exec_result = mcp_manager.call("execute_python", {"code": code_block})
-                logger.info(f"可视化代码执行完成: {exec_result[:120]}")
-                desc_prompt = WORKER_SYSTEM_PROMPT.format(
-                    agent_type=agent_type, current_date=date_str, context="你已生成图表，请描述结果。用 ![描述](/generated/文件名.png) 引用图片。",
-                )
-                desc_messages = [
-                    {"role": "system", "content": desc_prompt},
-                    {"role": "user", "content": f"{dep_context}你已生成以下需求的图表：\n{user_input}\n\n代码执行输出：\n{exec_result}\n\n请描述图表内容并引用图片。"},
-                ]
-                return _stream_response(desc_messages)
-        # 后端 代码生成/执行失败 → 降级为普通流式
-        desc_prompt = WORKER_SYSTEM_PROMPT.format(
-            agent_type=agent_type, current_date=date_str, context="请直接输出结果。",
-        )
-        return _stream_response([
-            {"role": "system", "content": desc_prompt},
-            {"role": "user", "content": f"{dep_context}{user_input}"},
-        ])
 
     # 后端 编程意图：不需要工具（纯生成代码）
     if "编写代码" in intent or "写代码" in intent:

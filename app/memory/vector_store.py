@@ -22,13 +22,20 @@ class VectorMemory:
         logger.info("ChromaDB 向量记忆已初始化")
 
     def store(self, task_id: str, content: str, metadata: dict = None) -> None:
-        """后端 存储任务上下文（自动向量化）"""
-        self.collection.add(documents=[content], metadatas=[metadata or {}], ids=[task_id])
+        """后端 存储任务上下文（自动向量化），metadata 含 thread_id 用于会话隔离"""
+        meta = metadata or {}
+        self.collection.add(documents=[content], metadatas=[meta], ids=[task_id])
         logger.debug(f"向量记忆已存储: {task_id}")
 
-    def search(self, query: str, k: int = 5) -> list[str]:
-        """后端 语义搜索最相关的 k 个历史任务"""
-        results = self.collection.query(query_texts=[query], n_results=k)
+    def search(self, query: str, k: int = 5, thread_id: str = "") -> list[str]:
+        """后端 语义搜索最相关的 k 个历史任务，仅搜索指定 thread_id 的会话"""
+        if thread_id:
+            results = self.collection.query(
+                query_texts=[query], n_results=k,
+                where={"thread_id": thread_id},
+            )
+        else:
+            results = self.collection.query(query_texts=[query], n_results=k)
         return results.get("documents", [[]])[0]
 
     def clear(self) -> None:
