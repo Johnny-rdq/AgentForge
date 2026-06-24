@@ -6,6 +6,7 @@ node_modules/
 data/chroma_db/
 data/*.db
 data/*.json
+data/benchmarks/
 data/uploads/
 data/tasks/
 logs/

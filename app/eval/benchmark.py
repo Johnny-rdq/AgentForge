@@ -141,7 +141,7 @@ class BenchmarkRunner:
             "details": self.results,
         }
         # 后端 用绝对路径，避免后台线程 CWD 不一致导致文件写入错误位置
-        data_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data")
+        data_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data", "benchmarks")
         os.makedirs(data_dir, exist_ok=True)
         report_path = os.path.join(data_dir, f"benchmark_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
         with open(report_path, "w", encoding="utf-8") as f:

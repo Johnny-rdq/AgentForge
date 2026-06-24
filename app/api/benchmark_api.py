@@ -10,7 +10,7 @@ router = APIRouter(prefix="/api/v1/benchmark", tags=["benchmark"])
 
 logger = get_logger(__name__)
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
+DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data", "benchmarks")
 
 # 后端 评测运行状态（线程安全）
 _bench_state = {"running": False, "current": 0, "total": 50, "message": ""}
