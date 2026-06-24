@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, Play, Loader2 } from 'lucide-react'
 import useBenchmark from '../hooks/useBenchmark'
@@ -64,6 +65,7 @@ function CategoryBar({ cat, stats }) {
 
 export default function BenchmarkPage() {
   const navigate = useNavigate()
+  const [runCount, setRunCount] = useState(5)
   const { reports, currentReport, loading, loadReport, runBenchmark, benchRunning, benchProgress } = useBenchmark()
 
   if (loading && !currentReport) {
@@ -78,28 +80,41 @@ export default function BenchmarkPage() {
     return (
       <div className="flex-1 flex items-center justify-center flex-col gap-4">
         <div className="text-zinc-500 text-sm">暂无评测报告</div>
-        <div className="text-zinc-600 text-xs">点击下方按钮运行评测，或手动执行 python -m app.eval.benchmark</div>
-        <button
-          onClick={runBenchmark}
-          disabled={benchRunning}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-            benchRunning
-              ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
-              : 'bg-purple-600 hover:bg-purple-500 text-white'
-          }`}
-        >
-          {benchRunning ? (
-            <>
-              <Loader2 size={16} className="animate-spin" />
-              评测运行中... {benchProgress.current}/{benchProgress.total}
-            </>
-          ) : (
-            <>
-              <Play size={16} />
-              运行评测（50题）
-            </>
-          )}
-        </button>
+        <div className="text-zinc-600 text-xs">选择题目数，点击运行评测</div>
+        <div className="flex items-center gap-2">
+          <select
+            value={runCount}
+            onChange={e => setRunCount(Number(e.target.value))}
+            className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-300"
+            disabled={benchRunning}
+          >
+            <option value={5}>5 题（约1分钟）</option>
+            <option value={10}>10 题（约2分钟）</option>
+            <option value={20}>20 题（约4分钟）</option>
+            <option value={50}>50 题（约10分钟）</option>
+          </select>
+          <button
+            onClick={() => runBenchmark(runCount)}
+            disabled={benchRunning}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+              benchRunning
+                ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
+                : 'bg-purple-600 hover:bg-purple-500 text-white'
+            }`}
+          >
+            {benchRunning ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                {benchProgress.current}/{benchProgress.total}
+              </>
+            ) : (
+              <>
+                <Play size={16} />
+                运行评测
+              </>
+            )}
+          </button>
+        </div>
         {benchRunning && (
           <div className="w-64">
             <div className="flex justify-between text-xs text-zinc-500 mb-1">
@@ -148,8 +163,19 @@ export default function BenchmarkPage() {
                 {benchProgress.current}/{benchProgress.total}
               </div>
             )}
+            <select
+              value={runCount}
+              onChange={e => setRunCount(Number(e.target.value))}
+              className="bg-zinc-800 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-zinc-400"
+              disabled={benchRunning}
+            >
+              <option value={5}>5题</option>
+              <option value={10}>10题</option>
+              <option value={20}>20题</option>
+              <option value={50}>50题</option>
+            </select>
             <button
-              onClick={runBenchmark}
+              onClick={() => runBenchmark(runCount)}
               disabled={benchRunning}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                 benchRunning

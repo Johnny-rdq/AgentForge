@@ -36,16 +36,16 @@ export default function useBenchmark() {
     setLoading(false)
   }, [])
 
-  const runBenchmark = useCallback(async () => {
+  const runBenchmark = useCallback(async (count = 5) => {
     try {
-      const resp = await fetch('/api/v1/benchmark/run', { method: 'POST' })
+      const resp = await fetch(`/api/v1/benchmark/run?count=${count}`, { method: 'POST' })
       const data = await resp.json()
       if (data.status === 'already_running') {
         setBenchRunning(true)
         setBenchProgress(data.progress || benchProgress)
       } else if (data.status === 'started') {
         setBenchRunning(true)
-        setBenchProgress({ current: 0, total: 50, message: '启动评测...' })
+        setBenchProgress({ current: 0, total: count, message: `启动评测（${count}题）...` })
       }
     } catch {}
   }, [benchProgress])

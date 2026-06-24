@@ -60,15 +60,21 @@ async def bench_status():
 
 
 @router.post("/run")
-async def run_benchmark():
-    """后端 触发评测运行（后台异步，前端轮询 /status 获取进度）"""
+async def run_benchmark(count: int = 10):
+    """后端 触发评测运行（后台异步，前端轮询 /status 获取进度）
+
+    Query: count — 运行前 N 题（默认 10，最大 50）
+    """
+    from app.eval.tasks import BENCHMARK_TASKS
+    max_count = min(count, len(BENCHMARK_TASKS))
+
     with _bench_lock:
         if _bench_state["running"]:
             return {"status": "already_running", "message": "评测正在运行中", "progress": dict(_bench_state)}
         _bench_state["running"] = True
         _bench_state["current"] = 0
-        _bench_state["total"] = 50
-        _bench_state["message"] = "启动评测..."
+        _bench_state["total"] = max_count
+        _bench_state["message"] = f"启动评测（{max_count}题）..."
 
     # 后端 在后台线程中运行评测（避免阻塞请求）
     def _run_in_background():
@@ -78,7 +84,7 @@ async def run_benchmark():
             runner = BenchmarkRunner()
             runner._set_progress_callback(_on_progress)
             try:
-                await runner.run_all()
+                await runner.run_subset(max_count)
             except Exception as e:
                 logger.error(f"评测运行异常: {str(e)[:200]}")
             finally:
@@ -89,8 +95,8 @@ async def run_benchmark():
         asyncio.run(_async_run())
 
     threading.Thread(target=_run_in_background, daemon=True).start()
-    logger.info("评测已在后台启动")
-    return {"status": "started", "message": "评测已开始运行，请通过 /status 查看进度"}
+    logger.info(f"评测已在后台启动（{max_count}题）")
+    return {"status": "started", "message": f"评测已开始（{max_count}题），请通过 /status 查看进度"}
 
 
 def _on_progress(current: int, total: int, message: str = ""):

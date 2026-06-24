@@ -1,4 +1,5 @@
 # 后端 自动化基准评测 — 运行 50 个标准任务，评估多 Agent 系统能力
+import os
 import time
 import json
 import asyncio
@@ -34,6 +35,22 @@ class BenchmarkRunner:
             # 后端 推送进度
             if self._progress_cb:
                 self._progress_cb(i + 1, total, f"{status} {task['id']}: {task['task'][:40]}")
+
+        self._save_report()
+        return self.results
+
+    async def run_subset(self, count: int = 10) -> list[dict]:
+        """后端 只跑前 N 题（用于快速验证）"""
+        tasks = BENCHMARK_TASKS[:count]
+        logger.info(f"开始评测 {len(tasks)} 个标准任务（共 {len(BENCHMARK_TASKS)} 题） — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+        for i, task in enumerate(tasks):
+            result = await self._run_single(task)
+            self.results.append(result)
+            status = "PASS" if result["passed"] else "FAIL"
+            logger.info(f"{status} {task['id']}: {task['task'][:40]}... ({result['subtask_count']}子任务, {result['duration_s']:.1f}s)")
+            if self._progress_cb:
+                self._progress_cb(i + 1, len(tasks), f"{status} {task['id']}: {task['task'][:40]}")
 
         self._save_report()
         return self.results
@@ -123,7 +140,10 @@ class BenchmarkRunner:
             "categories": categories,
             "details": self.results,
         }
-        report_path = f"data/benchmark_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        # 后端 用绝对路径，避免后台线程 CWD 不一致导致文件写入错误位置
+        data_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data")
+        os.makedirs(data_dir, exist_ok=True)
+        report_path = os.path.join(data_dir, f"benchmark_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
         with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
         logger.info(f"评测报告已保存: {report_path}")

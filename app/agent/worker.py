@@ -40,6 +40,20 @@ FILE_READING_PROMPT = """你是文档分析专家。
 - 这是本地文件，没有来源 URL，直接给出分析结果即可
 - 控制在 500 字以内，只讲重点"""
 
+# 后端 可视化专用 prompt：强制生成 matplotlib 代码并保存到 data/generated/
+VISUALIZATION_PROMPT = """你是 {agent_type} 专家。
+
+当前日期：{date_str}
+
+你必须生成一段完整可执行的 Python 代码来创建图表。规则：
+- 使用 matplotlib，设置中文字体（SimHei 或 sans-serif fallback）
+- 开头加上：import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
+- 使用 plt.savefig('chart.png', dpi=150, bbox_inches='tight') 保存图表
+- 也可以保存为其他文件名如 chart_*.png
+- 代码要完整、可直接运行，不要省略 import
+- 只输出代码块，不要多余解释
+- 用 ```python ... ``` 包裹代码"""
+
 ROLE_DESCRIPTIONS = {
     "data_cleaner": "清洗和预处理数据，处理缺失值、异常值、格式统一。",
     "analyst": "对数据进行统计分析，计算关键指标，发现趋势和规律。",
@@ -243,6 +257,31 @@ def execute_subtask(subtask: dict) -> str:
             })
 
 
+def _get_llm_response_sync(messages: list, temperature: float = 0.3, max_tokens: int = 2048) -> str:
+    """后端 非流式 LLM 调用（用于需要完整返回才能继续的场景，如生成代码后执行）"""
+    try:
+        resp = llm_client.chat.completions.create(
+            model=settings.llm_model, messages=messages,
+            temperature=temperature, max_tokens=max_tokens,
+        )
+        return resp.choices[0].message.content or ""
+    except Exception as e:
+        logger.warning(f"LLM 非流式调用失败: {str(e)[:100]}")
+        return ""
+
+
+def _extract_code_block(text: str) -> str:
+    """后端 从 LLM 输出中提取 Python 代码块"""
+    import re
+    m = re.search(r'```python\s*\n(.*?)```', text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r'```\s*\n(.*?)```', text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
 def _try_direct_mode(intent: str, user_input: str, agent_type: str,
                      dep_context: str, date_str: str, original_input: str = "") -> str | None:
     """后端 直接模式：预判工具 → 直接调用 → 1 轮 LLM 总结
@@ -288,6 +327,43 @@ def _try_direct_mode(intent: str, user_input: str, agent_type: str,
             {"role": "user", "content": f"{dep_context}请翻译以下内容：\n\n{user_input}"},
         ]
         return _stream_response(messages)
+
+    # 后端 可视化意图：LLM 生成 matplotlib 代码 → 自动执行 → 引用产出文件
+    _vis_keywords = ["画图", "图表", "可视化", "生成图", "绘图", "作图", "柱状图", "折线图", "饼图",
+                     "散点图", "热力图", "plot", "chart", "visualiz", "matplotlib", "图形"]
+    if any(kw in intent for kw in _vis_keywords) or any(kw in user_input for kw in _vis_keywords):
+        logger.info(f"⚡ 直接模式 可视化: {user_input[:60]}")
+        code_prompt = VISUALIZATION_PROMPT.format(
+            agent_type=agent_type, date_str=date_str, user_input=user_input, dep_context=dep_context,
+        )
+        code_messages = [
+            {"role": "system", "content": code_prompt},
+            {"role": "user", "content": f"请根据以下需求生成并执行 Python 绘图代码。\n\n用户需求：{user_input}"},
+        ]
+        # 后端 用非流式获取代码（需要完整代码才能执行）
+        code_text = _get_llm_response_sync(code_messages)
+        if code_text and "```python" in code_text:
+            # 后端 提取代码块 → 执行 → 让 LLM 描述结果
+            code_block = _extract_code_block(code_text)
+            if code_block:
+                exec_result = mcp_manager.call("execute_python", {"code": code_block})
+                logger.info(f"可视化代码执行完成: {exec_result[:120]}")
+                desc_prompt = WORKER_SYSTEM_PROMPT.format(
+                    agent_type=agent_type, current_date=date_str, context="你已生成图表，请描述结果。用 ![描述](/generated/文件名.png) 引用图片。",
+                )
+                desc_messages = [
+                    {"role": "system", "content": desc_prompt},
+                    {"role": "user", "content": f"{dep_context}你已生成以下需求的图表：\n{user_input}\n\n代码执行输出：\n{exec_result}\n\n请描述图表内容并引用图片。"},
+                ]
+                return _stream_response(desc_messages)
+        # 后端 代码生成/执行失败 → 降级为普通流式
+        desc_prompt = WORKER_SYSTEM_PROMPT.format(
+            agent_type=agent_type, current_date=date_str, context="请直接输出结果。",
+        )
+        return _stream_response([
+            {"role": "system", "content": desc_prompt},
+            {"role": "user", "content": f"{dep_context}{user_input}"},
+        ])
 
     # 后端 编程意图：不需要工具（纯生成代码）
     if "编写代码" in intent or "写代码" in intent:
