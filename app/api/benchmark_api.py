@@ -1,11 +1,20 @@
-# 后端 评测报告 API — 报告列表 + 单篇详情查询
+# 后端 评测报告 API — 报告列表 + 单篇详情 + 触发运行
 import os
 import json
+import asyncio
+import threading
 from fastapi import APIRouter
+from app.core.logger import get_logger
 
 router = APIRouter(prefix="/api/v1/benchmark", tags=["benchmark"])
 
+logger = get_logger(__name__)
+
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
+
+# 后端 评测运行状态（线程安全）
+_bench_state = {"running": False, "current": 0, "total": 50, "message": ""}
+_bench_lock = threading.Lock()
 
 
 @router.get("/reports")
@@ -41,3 +50,52 @@ async def get_report(filename: str):
         return {"error": "报告不存在"}
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+@router.get("/status")
+async def bench_status():
+    """后端 查询评测运行状态"""
+    with _bench_lock:
+        return dict(_bench_state)
+
+
+@router.post("/run")
+async def run_benchmark():
+    """后端 触发评测运行（后台异步，前端轮询 /status 获取进度）"""
+    with _bench_lock:
+        if _bench_state["running"]:
+            return {"status": "already_running", "message": "评测正在运行中", "progress": dict(_bench_state)}
+        _bench_state["running"] = True
+        _bench_state["current"] = 0
+        _bench_state["total"] = 50
+        _bench_state["message"] = "启动评测..."
+
+    # 后端 在后台线程中运行评测（避免阻塞请求）
+    def _run_in_background():
+        from app.eval.benchmark import BenchmarkRunner
+
+        async def _async_run():
+            runner = BenchmarkRunner()
+            runner._set_progress_callback(_on_progress)
+            try:
+                await runner.run_all()
+            except Exception as e:
+                logger.error(f"评测运行异常: {str(e)[:200]}")
+            finally:
+                with _bench_lock:
+                    _bench_state["running"] = False
+                    _bench_state["message"] = "评测完成"
+
+        asyncio.run(_async_run())
+
+    threading.Thread(target=_run_in_background, daemon=True).start()
+    logger.info("评测已在后台启动")
+    return {"status": "started", "message": "评测已开始运行，请通过 /status 查看进度"}
+
+
+def _on_progress(current: int, total: int, message: str = ""):
+    """后端 评测进度回调（线程安全）"""
+    with _bench_lock:
+        _bench_state["current"] = current
+        _bench_state["total"] = total
+        _bench_state["message"] = message

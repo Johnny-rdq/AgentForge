@@ -73,17 +73,17 @@ def node_human_review(state: WorkflowState) -> dict:
 
 
 def node_execute(state: WorkflowState) -> dict:
-    """后端 节点2（核心）：调度 + 并行执行 + 自检，合并原 schedule/execute/reflect 三节点
+    """后端 节点2（核心）：调度 + 并行执行，纯执行不审查
 
     逻辑：
     1. 找出依赖全部完成的 pending 任务 → 标记 running
-    2. 线程池并行执行所有 running 任务
-    3. 还有 pending → 返回 "execute" 继续循环；全部完成 → 返回 "aggregate"
+    2. 线程池并行执行所有 running 任务 → 标记 executed（待反思）
+    3. 还有 pending → 返回 "execute" 继续循环；全部执行完 → reflect 或 aggregate
     """
     subtasks = state["subtasks"]
 
-    # 后端 步骤1：拓扑调度 — 找就绪任务
-    done_ids = {s["id"] for s in subtasks if s["status"] in ("done", "failed")}
+    # 后端 步骤1：拓扑调度 — 找就绪任务（含已执行但未完成反思的，其产出可被后续任务使用）
+    done_ids = {s["id"] for s in subtasks if s["status"] in ("done", "failed", "executed")}
     ready_ids = []
     for s in subtasks:
         if s["status"] != "pending":
@@ -92,9 +92,19 @@ def node_execute(state: WorkflowState) -> dict:
             ready_ids.append(s["id"])
 
     if not ready_ids:
-        # 后端 没有可调度的 → 检查是否全部完成
-        all_done = all(s["status"] in ("done", "failed") for s in subtasks)
-        return {"current_stage": "aggregate" if all_done else "execute"}
+        # 后端 没有可调度的 → 检查是否全部完成（没有 pending 也没有 executed）
+        all_settled = all(s["status"] in ("done", "failed") or (s["status"] == "executed" and not settings.reflection_enabled) for s in subtasks)
+        if all_settled:
+            # 后端 反思关闭时 executed 直接视为 done
+            for s in subtasks:
+                if s["status"] == "executed":
+                    s["status"] = "done"
+            return {"current_stage": "aggregate", "subtasks": subtasks}
+        # 后端 反思开启且有 executed 任务 → 去反思
+        has_executed = any(s["status"] == "executed" for s in subtasks)
+        if has_executed:
+            return {"current_stage": "reflect", "subtasks": subtasks}
+        return {"current_stage": "execute", "subtasks": subtasks}
 
     # 后端 标记就绪 → running
     new_subtasks = []
@@ -108,7 +118,7 @@ def node_execute(state: WorkflowState) -> dict:
     running = [s for s in subtasks if s["status"] == "running"]
     logger.info(f"调度+执行 {len(running)} 个子任务: {[t['id'] for t in running]}")
 
-    # 后端 步骤2：线程池并行执行（含 Reflector 质量审查）
+    # 后端 步骤2：线程池并行执行（纯执行，不审查）
     def run_one(sub):
         enriched_sub = dict(sub)
         enriched_sub["_dep_results"] = _get_dependency_results(sub, subtasks)
@@ -116,18 +126,8 @@ def node_execute(state: WorkflowState) -> dict:
         enriched_sub["_history"] = state.get("conversation_history", [])  # 后端 传递对话历史，Worker 可从中提取之前上传的文件路径
         try:
             result = execute_subtask(enriched_sub)
-            # 后端 Reflector 轻量审查：可通过 REFLECTION_ENABLED 环境变量控制开关
-            if settings.reflection_enabled:
-                reviewed_result, fix_attempts = reflect_and_fix(
-                    {"result": result, "description": sub.get("description", "")},
-                    max_retries=1,
-                )
-                if fix_attempts > 0:
-                    logger.info(f"Reflector 修正了 {sub['id']} 的输出（{fix_attempts}次）")
-            else:
-                reviewed_result = result
-            enriched_sub["result"] = reviewed_result
-            enriched_sub["status"] = "done"
+            enriched_sub["result"] = result
+            enriched_sub["status"] = "executed"  # 后端 待反思节点审查
         except Exception as e:
             logger.error(f"子任务执行失败 {sub['id']}: {str(e)[:100]}")
             enriched_sub["result"] = str(e)
@@ -151,14 +151,21 @@ def node_execute(state: WorkflowState) -> dict:
     result_map = {r["id"]: r for r in results}
     new_subtasks = [result_map.get(s["id"], s) for s in subtasks]
 
-    # 后端 步骤3：判断下一步 — 还有 pending 且错误 < 3 → 继续循环；否则汇总
+    # 后端 步骤3：判断下一步
     has_pending = any(s["status"] == "pending" for s in new_subtasks)
+    has_executed = any(s["status"] == "executed" for s in new_subtasks)
     has_failures = any(s["status"] == "failed" for s in new_subtasks)
     error_count = state.get("error_count", 0) + (1 if has_failures else 0)
 
     if has_pending and error_count < 3:
-        next_stage = "execute"  # 后端 循环回自己，处理下一批
+        next_stage = "execute"  # 后端 循环回自己，处理下一批依赖就绪的任务
+    elif has_executed and settings.reflection_enabled:
+        next_stage = "reflect"  # 后端 全部执行完毕 → 反思审查
     else:
+        # 后端 反思关闭 → 直接把 executed 标为 done，进入汇总
+        for s in new_subtasks:
+            if s["status"] == "executed":
+                s["status"] = "done"
         next_stage = "aggregate"
 
     return {
@@ -166,6 +173,37 @@ def node_execute(state: WorkflowState) -> dict:
         "current_stage": next_stage,
         "error_count": error_count,
     }
+
+
+def node_reflect(state: WorkflowState) -> dict:
+    """后端 节点3（可选）：Reflector 审查所有已执行子任务 → 修正 → 标记 done/failed"""
+    subtasks = state["subtasks"]
+    new_subtasks = []
+
+    reflected_count = 0
+    fixed_count = 0
+
+    for s in subtasks:
+        s = dict(s)
+        if s["status"] == "executed":
+            try:
+                reviewed_result, fix_attempts = reflect_and_fix(
+                    {"result": s.get("result", ""), "description": s.get("description", "")},
+                    max_retries=1,
+                )
+                if fix_attempts > 0:
+                    logger.info(f"Reflector 修正了 {s['id']} 的输出（{fix_attempts}次）")
+                    fixed_count += 1
+                s["result"] = reviewed_result
+                s["status"] = "done"
+                reflected_count += 1
+            except Exception as e:
+                logger.error(f"反思审查异常 {s['id']}: {str(e)[:100]}")
+                s["status"] = "done"  # 后端 反思异常不阻塞流程，保留原结果
+        new_subtasks.append(s)
+
+    logger.info(f"Reflector 审查完成: {reflected_count} 个审查, {fixed_count} 个修正")
+    return {"subtasks": new_subtasks, "current_stage": "aggregate"}
 
 
 def node_aggregate(state: WorkflowState) -> dict:

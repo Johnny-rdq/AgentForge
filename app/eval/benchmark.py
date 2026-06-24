@@ -16,15 +16,24 @@ class BenchmarkRunner:
 
     def __init__(self):
         self.results = []
+        self._progress_cb = None  # 后端 进度回调 (current, total, message)
+
+    def _set_progress_callback(self, cb):
+        """后端 设置进度回调（供 API 层注入，实时推送进度到前端）"""
+        self._progress_cb = cb
 
     async def run_all(self) -> list[dict]:
-        logger.info(f"开始评测 {len(BENCHMARK_TASKS)} 个标准任务 — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        total = len(BENCHMARK_TASKS)
+        logger.info(f"开始评测 {total} 个标准任务 — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-        for task in BENCHMARK_TASKS:
+        for i, task in enumerate(BENCHMARK_TASKS):
             result = await self._run_single(task)
             self.results.append(result)
             status = "PASS" if result["passed"] else "FAIL"
             logger.info(f"{status} {task['id']}: {task['task'][:40]}... ({result['subtask_count']}子任务, {result['duration_s']:.1f}s)")
+            # 后端 推送进度
+            if self._progress_cb:
+                self._progress_cb(i + 1, total, f"{status} {task['id']}: {task['task'][:40]}")
 
         self._save_report()
         return self.results

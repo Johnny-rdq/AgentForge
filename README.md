@@ -43,15 +43,21 @@ Master LLM 拆解 → 子任务列表
 [人工审批] ← 侧边栏一键开关，运行时动态切换
   ↓
 线程池并行执行（依赖感知调度）
-  ↓  ← execute 自循环，直到全部完成
-Reflector 质量审查（可选）
+  ↓  ← execute 自循环，直到全部执行完
+[Reflector 反思审查] ← 可选，通过配置开关
   ↓
 LLM 汇总合成最终报告
   ↓
 SSE 流式输出（token 级实时渲染）
 ```
 
-**4 节点 LangGraph DAG**：`decompose → [human_review] → execute ⇄ execute → aggregate → END`
+**LangGraph DAG**（4-5 节点）：
+
+```
+decompose → [human_review] → execute ⇄ execute → [reflect] → aggregate → END
+```
+
+> HITL 开启时插入 `human_review`，REFLECTION 开启时插入 `reflect`。基础 3 节点，全开 5 节点。
 
 ## 核心特性
 
@@ -61,8 +67,9 @@ SSE 流式输出（token 级实时渲染）
 - 🔧 **MCP 协议工具** — 7 个标准化工具（搜索/文件/代码/天气），Agent 白名单隔离
 - 🛡️ **安全沙箱** — Python 代码 AST 扫描拦截 + 子进程隔离执行
 - 📎 **文件分析** — 上传 PDF/Word/TXT/MD，自动预读内容注入 LLM，图表生成自动挂载
-- 🔍 **Reflector** — 可选质量审查，执行结果自动校验修正（最多 1 次）
+- 🔍 **Reflector** — 独立图节点，执行后自动审查+修正，不合格自动重试（最多 1 轮）
 - 🎛️ **HITL 人工审批** — 侧边栏一键开关，拆解方案暂停确认后才执行
+- 📊 **自动化评测** — 50 题标准基准测试，前端一键触发，实时进度，自动生成通过率/耗时/质量报告
 - 💾 **SQLite + ChromaDB** — 会话历史 + 向量记忆，重启不丢失
 - 🐳 **Docker 一键部署** — `docker compose up -d` 即用
 
@@ -96,6 +103,10 @@ SSE 流式输出（token 级实时渲染）
 | POST | `/api/v1/upload` | 上传文件 |
 | GET | `/api/v1/settings/hitl` | 获取 HITL 状态 |
 | POST | `/api/v1/settings/hitl` | 切换 HITL 开关 |
+| GET | `/api/v1/benchmark/reports` | 评测报告列表 |
+| GET | `/api/v1/benchmark/reports/{name}` | 评测报告详情 |
+| GET | `/api/v1/benchmark/status` | 评测运行进度 |
+| POST | `/api/v1/benchmark/run` | 触发评测运行 |
 
 ### SSE 事件类型
 
@@ -134,16 +145,16 @@ AgentForge/
 │   │   ├── chat.py          # SSE 流式对话 + HITL 审批 + 设置接口
 │   │   ├── session.py       # 会话 CRUD
 │   │   ├── upload.py        # 文件上传
-│   │   └── benchmark_api.py # 评测 API
+│   │   └── benchmark_api.py # 评测 API（报告查询 + 触发运行）
 │   ├── agent/
 │   │   ├── state.py         # LangGraph WorkflowState 定义
 │   │   ├── master.py        # Master LLM 任务拆解
 │   │   ├── worker.py        # Worker 执行（直接模式 + FC 模式）
 │   │   └── reflector.py     # Reflector 质量审查修正
 │   ├── graph/
-│   │   ├── workflow.py      # 4 节点 DAG 组装 + MemorySaver
-│   │   ├── nodes.py         # decompose / human_review / execute / aggregate
-│   │   └── edges.py         # execute 自循环条件路由
+│   │   ├── workflow.py      # DAG 组装 + MemorySaver（3-5 节点）
+│   │   ├── nodes.py         # decompose / human_review / execute / reflect / aggregate
+│   │   └── edges.py         # execute 自循环 + reflect 条件路由
 │   ├── core/
 │   │   ├── config.py        # 全局配置（多 Provider）
 │   │   ├── llm.py           # OpenAI 兼容 LLM 客户端

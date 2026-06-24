@@ -180,7 +180,7 @@ async def _execute_and_stream(task_input: str, thread_id: str = "default_session
                         if msg_type == "step":
                             for ns in payload.values():
                                 for s in ns.get("subtasks", []):
-                                    if s.get("result") and s["status"] in ("done", "failed"):
+                                    if s.get("result") and s["status"] in ("done", "failed", "executed"):
                                         _worker_result_state = payload
                                         break
                             if _worker_result_state is not None:
@@ -247,7 +247,7 @@ async def _execute_and_stream(task_input: str, thread_id: str = "default_session
                         if not isinstance(ns, dict):
                             continue
                         for s in ns.get("subtasks", []):
-                            if s.get("result") and s["status"] in ("done", "failed"):
+                            if s.get("result") and s["status"] in ("done", "failed", "executed"):
                                 _worker_result_state = step_output
                                 break
                 for node_name, node_state in step_output.items():
@@ -438,6 +438,10 @@ def _process_step(node_name: str, node_state: dict, task_id: str):
         if not is_simple:  # 后端 简单任务跳过执行中提示
             running = [s for s in subtasks if s["status"] == "running"]
             yield _sse("thinking", {"stage": "execute", "message": f"正在并行执行 {len(running)} 个子任务...", "running_ids": [s["id"] for s in running]})
+
+    elif stage == "reflect":
+        if not is_simple:
+            yield _sse("thinking", {"stage": "reflect", "message": "Reflector 审查执行结果..."})
 
     elif stage == "aggregate":
         if not is_simple:

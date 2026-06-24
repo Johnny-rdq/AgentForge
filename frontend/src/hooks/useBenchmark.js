@@ -1,9 +1,12 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 
 export default function useBenchmark() {
   const [reports, setReports] = useState([])
   const [currentReport, setCurrentReport] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [benchRunning, setBenchRunning] = useState(false)
+  const [benchProgress, setBenchProgress] = useState({ current: 0, total: 50, message: '' })
+  const pollRef = useRef(null)
 
   const loadReports = useCallback(async () => {
     setLoading(true)
@@ -33,11 +36,46 @@ export default function useBenchmark() {
     setLoading(false)
   }, [])
 
+  const runBenchmark = useCallback(async () => {
+    try {
+      const resp = await fetch('/api/v1/benchmark/run', { method: 'POST' })
+      const data = await resp.json()
+      if (data.status === 'already_running') {
+        setBenchRunning(true)
+        setBenchProgress(data.progress || benchProgress)
+      } else if (data.status === 'started') {
+        setBenchRunning(true)
+        setBenchProgress({ current: 0, total: 50, message: '启动评测...' })
+      }
+    } catch {}
+  }, [benchProgress])
+
+  useEffect(() => {
+    if (benchRunning) {
+      pollRef.current = setInterval(async () => {
+        try {
+          const resp = await fetch('/api/v1/benchmark/status')
+          const data = await resp.json()
+          setBenchProgress({ current: data.current, total: data.total, message: data.message })
+          if (!data.running) {
+            setBenchRunning(false)
+            clearInterval(pollRef.current)
+            const filename = await loadReports()
+            if (filename) loadReport(filename)
+          }
+        } catch {}
+      }, 1500)
+    }
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
+    }
+  }, [benchRunning, loadReports, loadReport])
+
   useEffect(() => {
     loadReports().then(filename => {
       if (filename) loadReport(filename)
     })
   }, [loadReports, loadReport])
 
-  return { reports, currentReport, loading, loadReport }
+  return { reports, currentReport, loading, loadReport, runBenchmark, benchRunning, benchProgress }
 }

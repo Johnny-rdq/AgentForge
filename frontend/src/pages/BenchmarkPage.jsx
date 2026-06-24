@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Play, Loader2 } from 'lucide-react'
 import useBenchmark from '../hooks/useBenchmark'
 
 const CATEGORY_LABELS = {
@@ -64,7 +64,7 @@ function CategoryBar({ cat, stats }) {
 
 export default function BenchmarkPage() {
   const navigate = useNavigate()
-  const { reports, currentReport, loading, loadReport } = useBenchmark()
+  const { reports, currentReport, loading, loadReport, runBenchmark, benchRunning, benchProgress } = useBenchmark()
 
   if (loading && !currentReport) {
     return (
@@ -78,7 +78,42 @@ export default function BenchmarkPage() {
     return (
       <div className="flex-1 flex items-center justify-center flex-col gap-4">
         <div className="text-zinc-500 text-sm">暂无评测报告</div>
-        <div className="text-zinc-600 text-xs">运行 python -m app.eval.benchmark 生成报告</div>
+        <div className="text-zinc-600 text-xs">点击下方按钮运行评测，或手动执行 python -m app.eval.benchmark</div>
+        <button
+          onClick={runBenchmark}
+          disabled={benchRunning}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+            benchRunning
+              ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
+              : 'bg-purple-600 hover:bg-purple-500 text-white'
+          }`}
+        >
+          {benchRunning ? (
+            <>
+              <Loader2 size={16} className="animate-spin" />
+              评测运行中... {benchProgress.current}/{benchProgress.total}
+            </>
+          ) : (
+            <>
+              <Play size={16} />
+              运行评测（50题）
+            </>
+          )}
+        </button>
+        {benchRunning && (
+          <div className="w-64">
+            <div className="flex justify-between text-xs text-zinc-500 mb-1">
+              <span>{benchProgress.message?.slice(0, 60)}</span>
+              <span>{Math.round((benchProgress.current / benchProgress.total) * 100)}%</span>
+            </div>
+            <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-purple-500 rounded-full transition-all duration-500"
+                style={{ width: `${(benchProgress.current / benchProgress.total) * 100}%` }}
+              />
+            </div>
+          </div>
+        )}
       </div>
     )
   }
@@ -106,16 +141,36 @@ export default function BenchmarkPage() {
               <p className="text-zinc-500 text-xs mt-1">{r.timestamp}</p>
             </div>
           </div>
-          {reports.length > 1 && (
-            <select
-              onChange={e => loadReport(e.target.value)}
-              className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-zinc-300"
+          <div className="flex items-center gap-3">
+            {benchRunning && (
+              <div className="flex items-center gap-2 text-xs text-zinc-400">
+                <Loader2 size={14} className="animate-spin" />
+                {benchProgress.current}/{benchProgress.total}
+              </div>
+            )}
+            <button
+              onClick={runBenchmark}
+              disabled={benchRunning}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                benchRunning
+                  ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
+                  : 'bg-purple-600/20 border border-purple-600/30 text-purple-400 hover:bg-purple-600/30'
+              }`}
             >
-              {reports.map(rp => (
-                <option key={rp.filename} value={rp.filename}>{rp.filename}</option>
-              ))}
-            </select>
-          )}
+              {benchRunning ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
+              {benchRunning ? '运行中' : '重新评测'}
+            </button>
+            {reports.length > 1 && (
+              <select
+                onChange={e => loadReport(e.target.value)}
+                className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-zinc-300"
+              >
+                {reports.map(rp => (
+                  <option key={rp.filename} value={rp.filename}>{rp.filename}</option>
+                ))}
+              </select>
+            )}
+          </div>
         </div>
 
         <div className="flex items-start gap-8 flex-wrap">
