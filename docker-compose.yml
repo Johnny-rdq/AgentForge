@@ -1,7 +1,11 @@
-# 后端 Docker Compose 一键部署
+# 后端 Docker Compose 一键部署 — D 盘部署版
 services:
   agentforge:
-    build: .
+    build:
+      context: .
+      args:
+        - HTTP_PROXY=${HTTP_PROXY:-}
+        - HTTPS_PROXY=${HTTPS_PROXY:-}
     container_name: agentforge
     ports:
       - "7860:7860"
@@ -20,7 +24,20 @@ services:
       - WORKFLOW_TIMEOUT=${WORKFLOW_TIMEOUT:-300}
       # 后端 日志
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # 后端 代理（国内访问国际 API 需要，你开了魔法可留空）
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      # 后端 Hugging Face 镜像（ChromaDB 下载向量模型走国内镜像，不走龟速 HF 官网）
+      - HF_ENDPOINT=https://hf-mirror.com
     volumes:
-      - ./data:/app/data   # 后端 数据库 + 上传文件持久化
-      - ./logs:/app/logs    # 后端 日志持久化
+      # 后端 命名卷（存在 WSL2 ext4 原生文件系统，I/O 快 10 倍+）
+      # 数据仍在 D 盘：D:\APP\Docker\data\DockerDesktopWSL\ 下的 WSL2 虚拟磁盘中
+      - agentforge_data:/app/data
+      - agentforge_logs:/app/logs
     restart: unless-stopped
+
+volumes:
+  agentforge_data:
+    external: true
+  agentforge_logs:
+    external: true

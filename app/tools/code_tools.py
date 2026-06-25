@@ -6,6 +6,7 @@ import os
 import sys
 from app.core.logger import get_logger
 from app.core.config import settings
+from app.core.session_context import get_current_thread_id
 
 logger = get_logger(__name__)
 
@@ -74,8 +75,9 @@ def execute_python(code: str, timeout: int = None) -> str:
         logger.warning(f"代码被安全拦截: {error_msg[:100]}")
         return f"[安全拦截] {error_msg}"
 
-    # 后端 工作目录：data/generated/（图表等产出物可通过 /generated/ 访问）
-    gen_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data", "generated")
+    # 后端 工作目录：data/generated/{thread_id}/（会话隔离，每个会话独立子目录）
+    thread_id = get_current_thread_id()
+    gen_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data", "generated", thread_id)
     os.makedirs(gen_dir, exist_ok=True)
 
     # 写入临时文件

@@ -32,5 +32,7 @@ python-docx>=1.1.0
 # 后端 OCR
 tencentcloud-sdk-python-ocr>=3.0.0
 
-# 后端 搜索（ping 用 stdlib urllib，无需额外依赖）
+# 后端 搜索
+tavily-python>=0.7.0
+duckduckgo-search>=8.0.0
 

@@ -8,6 +8,7 @@ from app.core.logger import get_logger
 from app.core.llm import llm_client, get_llm_stream
 from app.core.config import settings
 from app.core.mcp_manager import mcp_manager
+from app.core.session_context import get_current_thread_id
 
 logger = get_logger(__name__)
 
@@ -69,8 +70,7 @@ VISUALIZATION_PROMPT = """你是 {agent_type} 专家。
 ROLE_DESCRIPTIONS = {
     "data_cleaner": "清洗和预处理数据，处理缺失值、异常值、格式统一。",
     "analyst": "对数据进行统计分析，计算关键指标，发现趋势和规律。",
-    "visualizer": "一站式生成数据可视化图表（自动写代码+执行+保存图片）。直接描述想要的图表即可，无需额外拆分编写/执行步骤。在回复中用 ![描述](/generated/文件名.png) 引用图片。",
-    "coder": "编写可运行的 Python 代码来完成任务，代码要完整可直接执行。生成的文件（图表/HTML等）用 /generated/文件名 路径引用。",
+    "visualizer": "一站式生成数据可视化图表（自动写代码+执行+保存图片）。直接描述想要的图表即可，无需额外拆分编写/执行步骤。在回复中引用图片时，必须使用系统提供的准确文件路径（/generated/{thread_id}/文件名）。",
     "executor": "在安全沙箱中执行 Python 代码，返回执行结果。",
     "tester": "编写单元测试和集成测试代码，验证功能正确性，输出测试报告。",
     "reviewer": "审查代码质量和安全性，检查命名规范、逻辑漏洞和性能问题。",
@@ -83,13 +83,12 @@ ROLE_DESCRIPTIONS = {
 _FC_ROUNDS = {
     "researcher": 2, "data_cleaner": 2, "analyst": 2, "visualizer": 2,
     "executor": 2, "tester": 2, "reviewer": 2,
-    "coder": 1, "writer": 1, "translator": 1,
+    "writer": 1, "translator": 1,
 }
 
 # 后端 Agent 工具白名单
 _AGENT_TOOLS = {
     "researcher": {"search_internet", "fetch_weather", "read_file"},
-    "coder": {"execute_python", "install_package", "read_file", "list_files"},
     "executor": {"execute_python", "install_package"},
     "visualizer": {"execute_python"},
     "analyst": {"execute_python", "read_file", "search_internet"},
@@ -405,8 +404,10 @@ def _try_direct_mode(intent: str, user_input: str, agent_type: str,
                     exec_result = mcp_manager.call("execute_python", {"code": fixed_code})
                     logger.info(f"可视化代码修复后执行: {exec_result[:120]}")
 
-            # 后端 步骤4：扫描 data/generated/ 目录，找出本次生成的图片文件
-            gen_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data", "generated")
+            # 后端 步骤4：扫描 data/generated/{thread_id}/ 目录（会话隔离），找出本次生成的图片文件
+            # 后端 thread_id 由 nodes.py:run_one() 通过 ContextVar 设置，此处直接读取
+            thread_id = get_current_thread_id()
+            gen_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data", "generated", thread_id)
             image_files = []
             if os.path.isdir(gen_dir):
                 for f in os.listdir(gen_dir):
@@ -419,9 +420,9 @@ def _try_direct_mode(intent: str, user_input: str, agent_type: str,
                 image_files.sort(key=lambda x: x[1], reverse=True)  # 后端 最新文件排前面
                 image_files = [f[0] for f in image_files[:8]]  # 后端 最多取 8 个
 
-            # 后端 步骤5：构建文件引用列表，告诉 LLM 实际生成了哪些文件
+            # 后端 步骤5：构建文件引用列表（带 thread_id 前缀），告诉 LLM 实际生成了哪些文件
             if image_files:
-                file_list = "\n".join(f"  - /generated/{f}" for f in image_files)
+                file_list = "\n".join(f"  - /generated/{thread_id}/{f}" for f in image_files)
                 file_hint = f"以下是你生成的实际文件（请用这些确切的文件名在回复中引用）：\n{file_list}"
             else:
                 file_hint = "（未检测到新生成的图片文件，请根据代码执行输出判断）"
@@ -473,18 +474,6 @@ def _try_direct_mode(intent: str, user_input: str, agent_type: str,
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"{dep_context}请翻译以下内容：\n\n{user_input}"},
-        ]
-        return _stream_response(messages)
-
-    # 后端 编程意图：不需要工具（纯生成代码）
-    if "编写代码" in intent or "写代码" in intent:
-        logger.info(f"⚡ 直接模式 编程: {user_input[:40]}")
-        system_prompt = WORKER_SYSTEM_PROMPT.format(
-            agent_type=agent_type, current_date=date_str, context="你是编程专家，直接输出可运行代码。",
-        )
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"{dep_context}{user_input}"},
         ]
         return _stream_response(messages)
 

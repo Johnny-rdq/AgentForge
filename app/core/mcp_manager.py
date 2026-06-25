@@ -34,14 +34,16 @@ class MCPManager:
         self._tools: dict[str, MCPTool] = {}
 
     def register(self, tool: MCPTool) -> None:
+        """后端 注册工具到管理器（同名会覆盖，用于热更新场景）"""
         self._tools[tool.name] = tool
         logger.debug(f"MCP 工具已注册: {tool.name}")
 
     def get_schemas(self) -> list[dict]:
-        """后端 返回所有工具的 OpenAI function calling schema 列表"""
+        """后端 返回所有工具的 OpenAI function calling schema 列表，用于 LLM tools 参数"""
         return [t.to_openai_schema() for t in self._tools.values()]
 
     def get_tool_names(self) -> list[str]:
+        """后端 返回所有已注册工具的名称列表（调试/日志用）"""
         return list(self._tools.keys())
 
     def get_descriptions(self) -> str:
@@ -50,7 +52,9 @@ class MCPManager:
         return "\n".join(lines)
 
     def call(self, name: str, arguments: dict) -> Any:
-        """后端 按名称调用工具，解包参数执行"""
+        """后端 按名称调用工具，解包参数执行
+        抛出 ValueError：工具未注册时（调用方应 catch 并返回友好错误给 LLM）
+        """
         tool = self._tools.get(name)
         if not tool:
             raise ValueError(f"工具不存在: {name}")

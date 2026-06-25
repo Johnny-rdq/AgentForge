@@ -3,6 +3,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from langgraph.types import interrupt
 from app.core.logger import get_logger
+from app.core.session_context import set_current_thread_id
 from app.agent.state import WorkflowState, SubtaskDef
 from app.agent.master import decompose_task
 from app.agent.worker import execute_subtask
@@ -60,7 +61,7 @@ def node_human_review(state: WorkflowState) -> dict:
         new_subtasks = [SubtaskDef(
             id=s.get("id", f"sub_{i+1}"),
             description=s.get("description", ""),
-            agent_type=s.get("agent_type", "coder"),
+            agent_type=s.get("agent_type", "researcher"),
             depends_on=s.get("depends_on", []),
             status="pending", result=None, retries=0,
         ) for i, s in enumerate(modified)]
@@ -121,7 +122,10 @@ def node_execute(state: WorkflowState) -> dict:
 
     # 后端 步骤2：线程池并行执行（纯执行，不审查）
     def run_one(sub):
+        # 后端 设置会话上下文：后续所有工具函数（code_tools/file_tools/upload）自动读取，无需传参
+        set_current_thread_id(state.get("thread_id", "default_session"))
         enriched_sub = dict(sub)
+        enriched_sub["_thread_id"] = state.get("thread_id", "default_session")  # 后端 传递会话 ID，Worker 扫描生成文件时用
         enriched_sub["_dep_results"] = _get_dependency_results(sub, subtasks)
         enriched_sub["_original_input"] = state.get("user_input", "")  # 后端 传递原始输入，Worker 可提取文件路径
         enriched_sub["_history"] = state.get("conversation_history", [])  # 后端 传递对话历史，Worker 可从中提取之前上传的文件路径

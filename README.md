@@ -72,6 +72,7 @@ decompose → [human_review] → execute ⇄ execute → [reflect] → aggregate
 - 🎛️ **HITL 人工审批** — 侧边栏一键开关，拆解方案暂停确认后才执行
 - 📊 **自动化评测** — 50 题标准基准测试，前端一键触发，实时进度，自动生成通过率/耗时/质量报告
 - 💾 **SQLite + ChromaDB** — 会话历史 + 向量记忆，重启不丢失
+- 🔒 **会话隔离** — 不同会话的图表/文件互不污染，同一会话内每次任务自动清理旧产物
 - 🐳 **Docker 一键部署** — `docker compose up -d` 即用
 
 ## Agent 类型
@@ -79,7 +80,6 @@ decompose → [human_review] → execute ⇄ execute → [reflect] → aggregate
 | Agent | 工具 | 说明 |
 |-------|------|------|
 | `researcher` | 搜索 / 天气 / 读文件 | 信息调研 |
-| `coder` | 执行 Python / 安装包 / 读写文件 | 代码生成 |
 | `analyst` | 执行 Python / 读文件 / 搜索 | 数据分析 |
 | `visualizer` | 执行 Python | 图表生成（matplotlib） |
 | `data_cleaner` | 执行 Python / 读文件 | 数据清洗 |
@@ -159,7 +159,8 @@ AgentForge/
 │   ├── core/
 │   │   ├── config.py        # 全局配置（多 Provider）
 │   │   ├── llm.py           # OpenAI 兼容 LLM 客户端
-│   │   └── mcp_manager.py   # MCP 工具注册中心
+│   │   ├── mcp_manager.py   # MCP 工具注册中心
+│   │   └── session_context.py # 会话隔离上下文（ContextVar）
 │   ├── tools/
 │   │   ├── mcp_server.py    # MCP 工具注册入口
 │   │   ├── file_tools.py    # 文件读写 + PDF OCR

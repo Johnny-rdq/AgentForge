@@ -8,12 +8,15 @@ from app.core.config import settings
 
 logger = get_logger(__name__)
 
-# 后端 代理配置（国内访问国际服务需要）
+# ===== 后端 代理配置 =====
+# 后端 国内服务器访问 Tavily / DuckDuckGo / wttr.in 需要代理
+# 后端 在 .env 中设置 HTTP_PROXY 和 HTTPS_PROXY 即可（如 http://127.0.0.1:7890）
 _PROXIES = {}
 if settings.http_proxy:
     _PROXIES["http"] = settings.http_proxy
 if settings.https_proxy:
     _PROXIES["https"] = settings.https_proxy
+# 后端 urllib 用 ProxyHandler + build_opener（天气查询用）
 _proxy_handler = urllib.request.ProxyHandler(_PROXIES) if _PROXIES else None
 _proxy_opener = urllib.request.build_opener(_proxy_handler) if _proxy_handler else None
 
@@ -25,6 +28,7 @@ def search_internet(query: str, max_results: int = 5) -> str:
         for proto, proxy_url in _PROXIES.items():
             os.environ[proto + "_proxy"] = proxy_url
 
+    # ===== Tavily 优先（AI 专用搜索，结果质量高，需 API Key）=====
     if settings.tavily_api_key:
         try:
             from tavily import TavilyClient
@@ -45,7 +49,7 @@ def search_internet(query: str, max_results: int = 5) -> str:
         except Exception as e:
             logger.warning(f"Tavily 失败，降级 DDG: {str(e)[:80]}")
 
-    # 后端 DDG 兜底
+    # ===== DDG 兜底（免费，无需 API Key，但国内可能被墙需代理）=====
     try:
         from duckduckgo_search import DDGS
         results = []
@@ -90,6 +94,7 @@ def fetch_weather(city: str) -> str:
         return f"天气查询失败: {str(e)[:200]}"
 
 
+# 后端 工具 Schema 字典（供 mcp_server.py 注册时取用 parameters，避免重复定义）
 SEARCH_TOOL_SCHEMAS = {
     "search_internet": {
         "name": "search_internet",

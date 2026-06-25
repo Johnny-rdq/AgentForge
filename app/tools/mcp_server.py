@@ -1,4 +1,6 @@
-# 后端 MCP 工具注册入口 — 应用启动时批量注册
+# 后端 MCP 工具注册入口 — 应用启动时（lifespan）调用 register_all_tools()
+# 后端 注册顺序：文件操作 → 代码执行 → 网络搜索（按功能分组，便于维护）
+# 后端 每个工具的 Schema 参数从各模块的 *_TOOL_SCHEMAS 字典取，避免重复定义
 from app.core.logger import get_logger
 from app.core.mcp_manager import MCPTool, mcp_manager
 from app.tools.file_tools import read_file, write_file, list_files, FILE_TOOL_SCHEMAS
@@ -9,7 +11,7 @@ logger = get_logger(__name__)
 
 
 def register_all_tools():
-    """后端 注册所有 MCP 工具到全局管理器"""
+    """后端 注册所有 MCP 工具到全局管理器（FastAPI lifespan 启动时调用一次）"""
 
     mcp_manager.register(MCPTool(
         name="read_file", description="读取文件内容，支持 txt/csv/json/md 等文本格式",

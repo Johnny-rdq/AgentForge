@@ -25,13 +25,15 @@ export default function ImageViewer({ src, alt, onClose }) {
   if (!src) return null
 
   const getImageSrc = (raw) => {
-    // 后端 把各种格式的 src 规范为 /generated/文件名
     const decoded = decodeURIComponent(raw)
-    // 提取纯文件名（去掉所有路径前缀和协议前缀）
-    const match = decoded.match(/[^/\\]+\.(png|jpg|jpeg|gif|svg|webp|bmp)(?:\?.*)?$/i)
-    const filename = match ? match[0] : null
-    if (!filename) return decoded
-    return `/generated/${filename}`
+    // 移除协议+域名前缀（http://xxx/generated/... → /generated/...）
+    const cleaned = decoded.replace(/^https?:\/\/[^/]+\/generated\//, '/generated/')
+    // 如果已经是 /generated/ 开头的相对路径，直接返回
+    if (cleaned.startsWith('/generated/')) return cleaned
+    // 兜底：提取 /generated/ 之后的部分（含可能的子目录如 thread_id）
+    const match = decoded.match(/\/generated\/(.+\.(png|jpg|jpeg|gif|svg|webp|bmp))(?:\?.*)?$/i)
+    if (match) return `/generated/${match[1]}`
+    return cleaned
   }
   const imgSrc = getImageSrc(src)
 

@@ -64,6 +64,7 @@ class SQLMemory:
         logger.info("SQLite 数据库表已就绪")
 
     def create_session(self, thread_id: str, title: str = "") -> None:
+        """后端 创建会话记录（INSERT OR IGNORE，重复 thread_id 不会报错也不会覆盖）"""
         conn = sqlite3.connect(self.db_path)
         conn.execute("INSERT OR IGNORE INTO sessions (thread_id, title) VALUES (?, ?)", (thread_id, title or thread_id[:20]))
         conn.commit()

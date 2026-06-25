@@ -4,6 +4,7 @@ import os
 import asyncio
 import time
 import queue
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, Request, UploadFile, File, Form
 from sse_starlette.sse import EventSourceResponse
@@ -101,6 +102,9 @@ async def _execute_and_stream(task_input: str, thread_id: str = "default_session
     """后端 核心执行流程：简单任务直接调 Worker（跳过 graph），复杂任务走 LangGraph"""
     start_time = time.time()
 
+    # 后端 清除当前会话的生成文件目录，防止同一会话内旧请求的图表污染新请求
+    _clear_session_generated(thread_id)
+
     sql_memory.create_session(thread_id)
     sql_memory.update_title(thread_id, task_input)
 
@@ -169,10 +173,26 @@ async def _execute_and_stream(task_input: str, thread_id: str = "default_session
                 except queue.Empty:
                     break
 
-            # 后端 步骤2：哨兵已到 → 检查是否所有子任务已完成
+            # 后端 步骤2：哨兵已到 → 检查是否所有子任务已完成，单子任务立即结束
             if streaming_complete and not done_sent:
-                # 后端 等 graph 线程把后续 step 发过来（最长 120 秒，给 LLM 代码生成+执行+描述留足时间）
-                deadline = time.time() + 120.0
+                # 后端 快速路径：已缓存 Worker 结果 + 单子任务 → 直接结束，不等 graph_done
+                if _worker_result_state is not None:
+                    fout_fast, slist_fast = _extract_output(_worker_result_state)
+                    still_running_fast = [s["id"] for s in slist_fast if s["status"] in ("pending", "running")]
+                    if fout_fast and not still_running_fast and len(slist_fast) <= 1:
+                        elapsed = time.time() - start_time
+                        logger.info(f"⚡ 哨兵快速结束(单子任务): {task_id}, 耗时 {elapsed:.1f}s")
+                        done_sent = True
+                        _bg_persist(elapsed, task_id, thread_id, task_input, fout_fast, slist_fast, files_json)
+                        _save_conversation(thread_id, task_input, fout_fast)
+                        worker_mod._token_bridge = None
+                        executor.shutdown(wait=False)
+                        yield _sse("result", {"output": "", "task_id": task_id, "subtask_count": len(slist_fast), "streamed": True, "elapsed_ms": int(elapsed * 1000)})
+                        yield _sse("done", {"elapsed": round(elapsed, 1)})
+                        return
+
+                # 后端 等 graph 线程把后续 step 发过来（最长 45 秒，给 aggregate 汇总留足时间）
+                deadline = time.time() + 45.0
                 graph_finished = False
                 while time.time() < deadline:
                     try:
@@ -223,6 +243,7 @@ async def _execute_and_stream(task_input: str, thread_id: str = "default_session
                 # 后端 多子任务时不提前退出，等 graph_done → aggregate 汇总所有结果（含图片引用）
                 if len(slist) > 1:
                     logger.info(f"哨兵检测到 {len(slist)} 个子任务全部完成，等待 graph_done 走 aggregate 汇总")
+                    yield _sse("thinking", {"stage": "aggregate", "message": "正在汇总生成最终报告..."})
                     done_sent = False
                     streaming_complete = False
                     # 后端 清空缓存状态，防止旧版超时检测取到旧状态误判退出
@@ -560,6 +581,17 @@ def _bg_persist(elapsed_s: float, task_id: str, thread_id: str, task_input: str,
         logger.debug(f"任务已存库: {task_id} ({elapsed_ms}ms)")
     except Exception as e:
         logger.error(f"保存任务失败: {e}")
+
+
+def _clear_session_generated(thread_id: str) -> None:
+    """后端 清除当前会话的 data/generated/{thread_id}/ 目录，防止旧图表残留"""
+    gen_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data", "generated", thread_id)
+    if os.path.isdir(gen_dir):
+        try:
+            shutil.rmtree(gen_dir)
+            logger.debug(f"已清除会话生成目录: {gen_dir}")
+        except Exception as e:
+            logger.warning(f"清除生成目录失败（非致命）: {gen_dir} - {str(e)[:80]}")
 
 
 def _save_conversation(thread_id: str, task_input: str, final_output: str):

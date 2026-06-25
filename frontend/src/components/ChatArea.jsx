@@ -22,7 +22,7 @@ export default function ChatArea({ messages, workflowState, workflowSessionId, a
             输入你的任务，多Agent系统自动拆解、调度、执行。
           </p>
           <div className="flex gap-2 mt-6 flex-wrap justify-center">
-            {['分析销售数据并生成报告', '搜索对比主流AI框架', '用Python写一个贪吃蛇游戏'].map(hint => (
+            {['分析销售数据并生成报告', '搜索对比主流AI框架', '生成数据可视化图表'].map(hint => (
               <button
                 key={hint}
                 onClick={() => {

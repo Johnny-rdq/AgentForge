@@ -3,9 +3,10 @@ import os
 import uvicorn
 from datetime import datetime
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import FileResponse
 from app.core.config import settings
 from app.core.logger import app_logger
 from app.api.chat import router as chat_router
@@ -53,10 +54,23 @@ app.include_router(session_router)
 app.include_router(benchmark_router)
 app.include_router(upload_router)
 
-# 后端 生成文件挂载（图表等，必须先于前端 / 挂载）
+# 后端 生成文件目录（根目录，向后兼容 + 会话隔离子目录）
 generated_dir = os.path.join(os.path.dirname(__file__), "..", "data", "generated")
 os.makedirs(generated_dir, exist_ok=True)
-app.mount("/generated", StaticFiles(directory=generated_dir), name="generated")
+
+# 后端 自定义路由：支持两种路径格式
+# 后端   1. /generated/{thread_id}/filename.png → data/generated/{thread_id}/filename.png（会话隔离）
+# 后端   2. /generated/filename.png → data/generated/filename.png（向后兼容旧数据）
+@app.get("/generated/{file_path:path}")
+async def serve_generated(file_path: str):
+    full_path = os.path.join(generated_dir, file_path)
+    # 后端 安全检查：确保路径在 generated_dir 内，防止路径穿越
+    real_path = os.path.realpath(full_path)
+    if not real_path.startswith(os.path.realpath(generated_dir)):
+        raise HTTPException(status_code=404, detail="文件未找到")
+    if not os.path.isfile(real_path):
+        raise HTTPException(status_code=404, detail="文件未找到")
+    return FileResponse(real_path)
 
 # 后端 生产模式下挂载前端 SPA 静态文件
 frontend_dist = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")

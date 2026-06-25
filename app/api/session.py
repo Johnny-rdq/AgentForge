@@ -11,7 +11,8 @@ router = APIRouter(prefix="/api/v1", tags=["sessions"])
 
 @router.get("/sessions")
 async def list_sessions():
-    # 后端 按最近更新时间降序返回所有会话
+    """后端 列出所有会话，按最近更新时间降序（前端侧边栏用）"""
+    # 后端 直接查 SQLite：sql_memory 没有 list 方法，且这里只需 4 个字段，没必要加封装
     import sqlite3
     conn = sqlite3.connect(sql_memory.db_path)
     rows = conn.execute(
@@ -28,7 +29,7 @@ async def list_sessions():
 
 @router.post("/sessions")
 async def create_session(data: dict):
-    # 后端 创建新会话
+    """后端 创建新会话：前端传 thread_id 和 title，后端 INSERT OR IGNORE（幂等）"""
     thread_id = data.get("thread_id", f"session_{data.get('timestamp', '')}")
     title = data.get("title", thread_id[:30])
     sql_memory.create_session(thread_id, title)
@@ -38,10 +39,11 @@ async def create_session(data: dict):
 
 @router.get("/sessions/{thread_id}/messages")
 async def get_messages(thread_id: str):
-    # 后端 获取会话的历史消息（页面刷新后恢复对话，含文件元数据）
+    """后端 获取会话历史消息，返回 user/assistant 配对列表（前端刷新后恢复对话）"""
     history = sql_memory.get_history(thread_id)
     messages = []
     for h in history:
+        # 后端 每次任务记录是一条 user → assistant 对
         files_data = []
         try:
             files_data = json.loads(h.get("files_json", "[]"))
@@ -62,7 +64,8 @@ async def get_messages(thread_id: str):
 
 @router.delete("/sessions/{thread_id}")
 async def delete_session(thread_id: str):
-    # 后端 删除会话及关联任务
+    """后端 删除会话及其所有关联任务历史（级联删除）"""
+    # 后端 sql_memory 没有封装级联删除，直接操作 SQLite 更简洁
     import sqlite3
     conn = sqlite3.connect(sql_memory.db_path)
     conn.execute("DELETE FROM task_history WHERE thread_id = ?", (thread_id,))

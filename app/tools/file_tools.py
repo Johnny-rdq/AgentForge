@@ -6,6 +6,7 @@ import io
 import time
 from app.core.logger import get_logger
 from app.core.config import settings
+from app.core.session_context import get_current_thread_id
 
 logger = get_logger(__name__)
 
@@ -124,8 +125,9 @@ def read_file(file_path: str) -> str:
 
 
 def write_file(file_path: str, content: str) -> str:
-    """后端 写入文件到 completed_tasks 目录（仅取 basename 防路径穿越）"""
-    base_dir = os.path.join(os.path.dirname(__file__), "..", "..", "completed_tasks")
+    """后端 写入文件到 completed_tasks/{thread_id}/ 目录（会话隔离 + 仅取 basename 防路径穿越）"""
+    thread_id = get_current_thread_id()
+    base_dir = os.path.join(os.path.dirname(__file__), "..", "..", "completed_tasks", thread_id)
     full_path = os.path.join(base_dir, os.path.basename(file_path))
     os.makedirs(os.path.dirname(full_path), exist_ok=True)
     with open(full_path, "w", encoding="utf-8") as f:
