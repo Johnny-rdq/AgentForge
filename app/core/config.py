@@ -46,8 +46,20 @@ class Settings(BaseSettings):
     log_retention_days: int = 7
 
     # ========== 记忆 ==========
-    chroma_persist_dir: str = os.path.join(_PROJECT_ROOT, "data", "chroma_db")
-    sqlite_db_path: str = os.path.join(_PROJECT_ROOT, "data", "agent_memory.db")
+    vector_db_path: str = os.path.join(_PROJECT_ROOT, "data", "vector_memory.json")
+
+    # ========== 数据库 (PostgreSQL) ==========
+    pg_host: str = "localhost"
+    pg_port: int = 5432
+    pg_database: str = "agentforge"
+    pg_user: str = "agentforge"
+    pg_password: str = "agentforge123"
+
+    # ========== Milvus 向量数据库 ==========
+    milvus_host: str = "localhost"
+    milvus_port: int = 19530
+    milvus_uri: str = ""  # 后端 Zilliz Cloud 端点（https://xxx.api.zillizcloud.com），配了就不用 host:port
+    milvus_token: str = ""  # 后端 Zilliz Cloud API Key
 
     # ========== 腾讯云 OCR ==========
     tencent_secret_id: str = ""

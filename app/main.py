@@ -18,12 +18,19 @@ from app.tools.mcp_server import register_all_tools
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 后端 启动时注册 MCP 工具、创建运行时目录
-    register_all_tools()
+    # 后端 创建运行时目录（同步操作，快速完成）
     os.makedirs(os.path.join(os.path.dirname(__file__), "..", "data", "uploads"), exist_ok=True)
     os.makedirs(os.path.join(os.path.dirname(__file__), "..", "data", "generated"), exist_ok=True)
     os.makedirs(os.path.join(os.path.dirname(__file__), "..", "logs"), exist_ok=True)
     app_logger.info(f"AgentForge 启动: http://localhost:{settings.app_port}")
+
+    # 后端 注册 MCP 工具（等待完成后再接受请求，避免工具未就绪）
+    try:
+        register_all_tools()
+        app_logger.info("MCP 工具注册完成")
+    except Exception as e:
+        app_logger.error(f"MCP 工具注册失败: {e}")
+
     yield
     app_logger.info("AgentForge 关闭")
 
