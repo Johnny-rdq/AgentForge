@@ -525,7 +525,7 @@ def _emit_final_result(final_state, task_input, thread_id, task_id="", files_jso
     else:
         yield _sse("result", {"output": final_output, "task_id": task_id, "subtask_count": len(subtask_list), "elapsed_ms": elapsed_ms})
 
-    # 后端 持久化到 SQLite（含耗时）
+    # 后端 持久化到 PostgreSQL（含耗时）
     if task_id and final_output:
         try:
             import re
@@ -565,7 +565,7 @@ def _extract_output(state: dict) -> tuple:
 
 def _bg_persist(elapsed_s: float, task_id: str, thread_id: str, task_input: str,
                 final_output: str, subtask_list: list, files_json: str):
-    """后端 同步写 SQLite（INSERT < 5ms，不需要后台线程，避免数据丢失）"""
+    """后端 同步写 PostgreSQL（INSERT < 5ms，不需要后台线程，避免数据丢失）"""
     try:
         import re
         elapsed_ms = int(elapsed_s * 1000)
@@ -603,8 +603,8 @@ def _save_conversation(thread_id: str, task_input: str, final_output: str):
         hist[:] = hist[-20:]
     # 后端 存入 ChromaDB 向量记忆，Master 后续拆解时可搜到相似历史任务
     try:
-        from app.memory.vector_store import vector_memory
+        from app.memory.vector_store import get_vector_memory
         memory_content = f"用户: {task_input[:200]}\n结果: {final_output[:200]}"
-        vector_memory.store(f"{thread_id}_{int(time.time() * 1000)}", memory_content, {"thread_id": thread_id})
+        get_vector_memory().store(f"{thread_id}_{int(time.time() * 1000)}", memory_content, {"thread_id": thread_id})
     except Exception:
         pass  # 后端 记忆存储失败不影响主流程

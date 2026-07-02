@@ -7,9 +7,9 @@
 ### 1. 环境准备
 
 ```bash
-# 创建虚拟环境
 python -m venv .venv
-.venv\Scripts\activate
+.venv\Scripts\activate      # Windows
+# source .venv/bin/activate  # macOS/Linux
 pip install -r requirements.txt
 ```
 
@@ -22,10 +22,16 @@ copy .env.example .env
 
 ### 3. 启动
 
+**方式一：直接启动**
+
 ```bash
-start_api.bat
-# 或者
 python app/main.py
+```
+
+**方式二：Docker Compose（含 PostgreSQL）**
+
+```bash
+docker compose up -d
 ```
 
 访问 **http://localhost:7860**
@@ -41,28 +47,27 @@ python app/main.py
 - 🧠 **LLM 拆解** — Master Agent 分析意图，自动拆解为类型化子任务
 - 🔀 **依赖感知并行** — 无依赖子任务线程池并行，有依赖拓扑排序
 - 📡 **Token 级流式** — Worker 线程逐 token 推送 SSE
-- 🔧 **MCP 协议工具** — 7 个标准化工具（搜索/文件/代码/天气）
+- 🔧 **MCP 协议工具** — 标准化工具体系（搜索/文件/代码/天气）
 - 🛡️ **安全沙箱** — Python 代码 AST 扫描拦截 + 子进程隔离执行
 - 📎 **文件分析** — 上传 PDF/Word/TXT/MD，自动预读内容注入 LLM
 - 🖼️ **图片灯箱** — 对话中的图表/图片点击放大，支持缩放和下载
 - 🔍 **Reflector** — 执行后自动审查+修正，不合格自动重试
 - 🎛️ **HITL 人工审批** — 拆解方案暂停确认后才执行
-- 📊 **自动化评测** — 50 题标准基准测试，自动生成报告
+- 📊 **自动化评测** — 标准基准测试，自动生成报告
 - 💾 **PostgreSQL + 向量记忆** — 会话持久化 + 语义记忆搜索（Milvus / Zilliz Cloud）
 - 🔒 **会话隔离** — 不同会话的图表/文件互不污染
 
 ## 向量记忆配置
 
-AgentForge 使用 Milvus 向量数据库存储历史任务语义记忆，Master 拆解时自动搜索相似历史任务作为参考。
+使用 Milvus 向量数据库存储历史任务语义记忆，Master 拆解时自动搜索相似历史任务作为参考。
 
 ### 方式一：Zilliz Cloud（推荐，免费 1GB）
 
 无需 Docker，注册即用：
 
 ```env
-# .env
-MILVUS_URI=https://in03-xxx.api.zillizcloud.com   # 集群端点
-MILVUS_TOKEN=你的APIKey                            # API Key
+MILVUS_URI=https://in03-xxx.api.zillizcloud.com
+MILVUS_TOKEN=你的APIKey
 ```
 
 > 去 [cloud.zilliz.com](https://cloud.zilliz.com) 创建免费集群，获取端点和 Key。
@@ -70,21 +75,22 @@ MILVUS_TOKEN=你的APIKey                            # API Key
 ### 方式二：本地 Docker
 
 ```bash
-docker compose up -d milvus etcd minio
+# 自行启动 Milvus 容器，然后配置 .env
 ```
 
 ```env
-# .env
 MILVUS_HOST=localhost
 MILVUS_PORT=19530
 ```
 
-### 方式三：跳过（使用本地 JSON 存储）
+### 方式三：跳过
 
 ```env
-# .env
-SKIP_MILVUS=true
+MILVUS_URI=
+MILVUS_TOKEN=
 ```
+
+不配置则跳过向量记忆。
 
 ## API 接口
 
@@ -153,14 +159,8 @@ PG_USER=agentforge
 PG_PASSWORD=agentforge123
 
 # ========== Milvus / Zilliz Cloud 向量记忆 ==========
-# 推荐：Zilliz Cloud（免费 1GB，无需 Docker）
 MILVUS_URI=https://in03-xxx.api.zillizcloud.com
 MILVUS_TOKEN=你的APIKey
-# 本地 Docker（二选一）
-# MILVUS_HOST=localhost
-# MILVUS_PORT=19530
-# 跳过向量记忆
-# SKIP_MILVUS=true
 ```
 
 ## Agent 类型
@@ -183,30 +183,17 @@ MILVUS_TOKEN=你的APIKey
 AgentForge/
 ├── app/
 │   ├── main.py              # FastAPI 入口
-│   ├── api/                 # API 路由（chat, session, upload, benchmark）
-│   ├── agent/               # Agent 实现（master, worker, reflector）
-│   ├── graph/               # LangGraph 工作流节点
-│   ├── core/                # 核心组件（config, llm, mcp_manager, logger）
-│   ├── tools/               # MCP 工具（file, code, search）
+│   ├── api/                 # 路由层（chat, session, upload, benchmark）
+│   ├── agent/               # Agent 实现（master, worker, reflector, state）
+│   ├── graph/               # LangGraph 工作流（nodes, edges, workflow）
+│   ├── core/                # 核心组件（config, llm, mcp_manager, logger, session）
+│   ├── tools/               # MCP 工具（code, file, search, mcp_server）
 │   ├── memory/              # 存储层（sql_store, vector_store）
-│   └── models/              # 数据模型
-├── data/                    # 运行时数据（uploads, generated, benchmarks）
+│   ├── models/              # 数据模型
+│   └── eval/                # 自动化评测
 ├── frontend/                # 前端 React SPA
+├── data/                    # 运行时数据（uploads, generated, benchmarks）
 ├── logs/                    # 日志文件
-├── docker-compose.yml       # Docker 编排（PostgreSQL + Milvus）
-└── *.bat                    # Windows 启动脚本
-```
-
-## 开发模式
-
-```bash
-pip install -r requirements.txt
-uvicorn app.main:app --host 0.0.0.0 --port 7860 --reload
-```
-
-## 生产环境
-
-```bash
-pip install gunicorn
-gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:7860
+├── docker-compose.yml       # Docker 编排（PostgreSQL + App）
+└── Dockerfile               # 应用镜像构建
 ```

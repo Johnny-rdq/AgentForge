@@ -24,7 +24,7 @@ async def lifespan(app: FastAPI):
     os.makedirs(os.path.join(os.path.dirname(__file__), "..", "logs"), exist_ok=True)
     app_logger.info(f"AgentForge 启动: http://localhost:{settings.app_port}")
 
-    # 后端 注册 MCP 工具（等待完成后再接受请求，避免工具未就绪）
+    # 后端 注册 MCP 工具
     try:
         register_all_tools()
         app_logger.info("MCP 工具注册完成")

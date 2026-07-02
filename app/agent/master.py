@@ -4,7 +4,7 @@ import re
 from app.core.logger import get_logger
 from app.core.llm import get_llm_response
 from app.core.mcp_manager import mcp_manager
-from app.memory.vector_store import vector_memory
+from app.memory.vector_store import get_vector_memory
 from app.agent.worker import get_available_agent_types, ROLE_DESCRIPTIONS
 
 logger = get_logger(__name__)
@@ -48,7 +48,7 @@ def decompose_task(user_input: str, conversation_history: list[dict] = None, thr
     memory_context = ""
     try:
         # 后端 仅搜索当前 thread_id 的记忆，避免跨会话内容泄露
-        similar_tasks = vector_memory.search(user_input, k=3, thread_id=thread_id) if thread_id else []
+        similar_tasks = get_vector_memory().search(user_input, k=3, thread_id=thread_id) if thread_id else []
         if similar_tasks and any(similar_tasks):
             memory_context = "历史相似任务经验（参考其拆解策略，但根据当前任务调整）：\n"
             for i, mem in enumerate(similar_tasks, 1):

@@ -1,43 +1,32 @@
-# 后端 Docker Compose 一键部署 — D 盘部署版
+# 后端 Docker Compose 一键部署所有服务
 services:
-  agentforge:
-    build:
-      context: .
-      args:
-        - HTTP_PROXY=${HTTP_PROXY:-}
-        - HTTPS_PROXY=${HTTPS_PROXY:-}
-    container_name: agentforge
+  # 后端 PostgreSQL 数据库
+  postgres:
+    image: postgres:16-alpine  # 后端 alpine 精简版，110MB
+    container_name: agentforge-postgres
+    environment:
+      - POSTGRES_DB=agentforge
+      - POSTGRES_USER=agentforge
+      - POSTGRES_PASSWORD=agentforge123
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./volumes/postgres:/var/lib/postgresql/data  # 后端 数据持久化
+    restart: unless-stopped
+
+  # 后端 AgentForge API 服务
+  app:
+    build: .  # 后端 从当前目录 Dockerfile 构建
+    container_name: agentforge-app
     ports:
       - "7860:7860"
     environment:
-      # 后端 LLM 配置（必填）
-      - LLM_API_KEY=${LLM_API_KEY}
-      - LLM_MODEL=${LLM_MODEL:-qwen-plus}
-      - LLM_PROVIDER=${LLM_PROVIDER:-agnes}
-      - LLM_BASE_URL=${LLM_BASE_URL:-https://apihub.agnes-ai.com/v1}
-      # 后端 搜索配置（可选，不配则用内置搜索）
-      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
-      # 后端 Agent 配置
-      - MAX_WORKERS=${MAX_WORKERS:-6}
-      - HITL_ENABLED=${HITL_ENABLED:-false}
-      - REFLECTION_ENABLED=${REFLECTION_ENABLED:-false}
-      - WORKFLOW_TIMEOUT=${WORKFLOW_TIMEOUT:-300}
-      # 后端 日志
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      # 后端 代理（国内访问国际 API 需要，你开了魔法可留空）
-      - HTTP_PROXY=${HTTP_PROXY:-}
-      - HTTPS_PROXY=${HTTPS_PROXY:-}
-      # 后端 Hugging Face 镜像（ChromaDB 下载向量模型走国内镜像，不走龟速 HF 官网）
-      - HF_ENDPOINT=https://hf-mirror.com
-    volumes:
-      # 后端 命名卷（存在 WSL2 ext4 原生文件系统，I/O 快 10 倍+）
-      # 数据仍在 D 盘：D:\APP\Docker\data\DockerDesktopWSL\ 下的 WSL2 虚拟磁盘中
-      - agentforge_data:/app/data
-      - agentforge_logs:/app/logs
+      - PG_HOST=postgres  # 后端 Docker 内用容器名通信，覆盖 .env 的 localhost
+    env_file:
+      - .env  # 后端 其他配置从 .env 读取
+    depends_on:
+      - postgres  # 后端 等 PG 起来再启动
     restart: unless-stopped
 
 volumes:
-  agentforge_data:
-    external: true
-  agentforge_logs:
-    external: true
+  postgres:
